@@ -19,9 +19,13 @@ TARGET_URLS = {
         "selector": "button[label='Add to Cart']",
     },
 }
+
 # Example of other methods to check items.
 # "Product 2": {"url": "https://example.com/product2", "selector": ".add-to-cart-button"},
 # "Product 3": {"url": "https://example.com/product3", "selector": "#add-to-cart"},
+
+# Dictionary to keep track of stock status
+stock_status = {product: False for product in TARGET_URLS}
 
 
 # Send message to discord channel
@@ -47,10 +51,14 @@ async def check_stock():
             soup = BeautifulSoup(response.content, "html.parser")
             add_to_cart_button = soup.select_one(selector)
             if add_to_cart_button:
-                await send_message(f"{product} is in stock: {url}")
-                logging.info(f"{product} is in stock. Sent message to discord channel.")
+                if not stock_status[product]:
+                    await send_message(f"{product} is in stock: {url}")
+                    logging.info(f"{product} is in stock. Sent message to discord channel.")
+                    stock_status[product] = True
             else:
-                logging.info(f"{product} is not in stock. It was last checked at {datetime.now()}")
+                if stock_status[product]:
+                    logging.info(f"{product} is out of stock. It was last checked at {datetime.now()}")
+                    stock_status[product] = False
     except Exception as e:
         logging.error(f"Error checking stock: {e}")
 
@@ -96,7 +104,7 @@ if __name__ == "__main__":
     open("logs/ui_stock_bot.log", "w").close()
 
     # Discord bot token and channel ID
-    DISCORD_TOKEN = config("DISCORD_TOKEN")
+    DISCORD_TOKEN = config("CORD_TOKEN")
     DISCORD_CHANNEL_ID = config("DISCORD_CHANNEL_ID")
 
     if not DISCORD_TOKEN or not DISCORD_CHANNEL_ID:
