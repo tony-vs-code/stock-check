@@ -55,42 +55,45 @@ async def check_stock():
         logging.error(f"Error checking stock: {e}")
 
 
-# Every week on Monday, lets clean up the log file.
+# Every week on Monday, lets clean up the logs file.
 @tasks.loop(hours=168)
-async def clean_log():
+async def clean_logs():
     try:
-        current_log_file = "log/ui_stock_bot.log"
-        for file in os.listdir("log"):
-            file_path = os.path.join("log", file)
+        current_log_file = "logs/ui_stock_bot.log"
+        for file in os.listdir("logs"):
+            file_path = os.path.join("logs", file)
             if file.endswith(".log") and file_path != current_log_file:
                 # Check if the file was modified more than a week ago
                 if os.path.getmtime(file_path) < (datetime.now().timestamp() - 7 * 24 * 60 * 60):
                     os.remove(file_path)
                     logging.info(f"Deleted old log file: {file_path}")
     except Exception as e:
-        logging.error(f"Error cleaning log: {e}")
+        logging.error(f"Error cleaning logs: {e}")
 
 
 class MyClient(discord.Client):
     async def on_ready(self):
         logging.info(f"Logged in as {self.user}")
         check_stock.start()
-        clean_log.start()
+        clean_logs.start()
 
 
 if __name__ == "__main__":
     # Logging
-    if not os.path.exists("log"):
-        os.makedirs("log")
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
 
     logging.basicConfig(
-        filename="log/ui_stock_bot.log",
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler("logs/ui_stock_bot.log"),
+            logging.StreamHandler(),  # This will log to the console
+        ],
     )
 
     # reset the log file on startup
-    open("log/ui_stock_bot.log", "w").close()
+    open("logs/ui_stock_bot.log", "w").close()
 
     # Discord bot token and channel ID
     DISCORD_TOKEN = config("DISCORD_TOKEN")
