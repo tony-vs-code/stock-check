@@ -104,7 +104,7 @@ if __name__ == "__main__":
     open("logs/ui_stock_bot.log", "w").close()
 
     # Discord bot token and channel ID
-    DISCORD_TOKEN = config("DISCORD_TOKEN ")
+    DISCORD_TOKEN = config("DISCORD_TOKEN")
     DISCORD_CHANNEL_ID = config("DISCORD_CHANNEL_ID")
 
     if not DISCORD_TOKEN or not DISCORD_CHANNEL_ID:
