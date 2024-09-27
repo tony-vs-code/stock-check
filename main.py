@@ -43,22 +43,32 @@ async def send_message(message: str) -> None:
 # Check if the product is in stock
 @tasks.loop(seconds=15)
 async def check_stock():
+    logging.debug("check_stock task is running")
     try:
         for product, info in TARGET_URLS.items():
             url = info["url"]
             selector = info["selector"]
+            logging.info(f"Checking stock for {product} at {url}")
             response = requests.get(url)
+            if response.status_code != 200:
+                logging.error(f"Failed to fetch {url}: Status code {response.status_code}")
+                continue
+
             soup = BeautifulSoup(response.content, "html.parser")
             add_to_cart_button = soup.select_one(selector)
             if add_to_cart_button:
                 if not stock_status[product]:
-                    await send_message(f"{product} is in stock: {url}")
                     logging.info(f"{product} is in stock. Sent message to discord channel.")
+                    await send_message(f"{product} is in stock: {url}")
                     stock_status[product] = True
+                else:
+                    logging.warning(f"{product} is in stock but notification already sent.")
             else:
                 if stock_status[product]:
                     logging.info(f"{product} is out of stock. It was last checked at {datetime.now()}")
                     stock_status[product] = False
+                else:
+                    logging.info(f"No 'Add to Cart' button found for {product} at {url} using selector '{selector}'")
     except Exception as e:
         logging.error(f"Error checking stock: {e}")
 
@@ -66,6 +76,7 @@ async def check_stock():
 # Every week on Monday, lets clean up the logs file.
 @tasks.loop(hours=168)
 async def clean_logs():
+    logging.debug("clean_logs task is running")
     try:
         current_log_file = "logs/ui_stock_bot.log"
         for file in os.listdir("logs"):
@@ -92,7 +103,7 @@ if __name__ == "__main__":
         os.makedirs("logs")
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.WARNING,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler("logs/ui_stock_bot.log"),

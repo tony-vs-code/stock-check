@@ -1,0 +1,12 @@
+{
+    "TARGET_URLS": {
+        "G5 PTZ": {
+            "url": "https://store.ui.com/us/en/category/all-cameras-nvrs/products/uvc-g5-ptz",
+            "selector": "button[label='Add to Cart']"
+        },
+        "G5 Turret Ultra": {
+            "url": "https://store.ui.com/us/en/category/cameras-dome-turret/products/uvc-g5-turret-ultra?variant=uvc-g5-turret-ultra",
+            "selector": "button[label='Add to Cart']"
+        }
+    }
+}
