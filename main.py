@@ -2,12 +2,12 @@ import discord
 import os
 import logging
 import asyncio
-import aiohttp
 from discord.ext import tasks
 from decouple import config
 from bs4 import BeautifulSoup
 from datetime import datetime
 from typing import Dict, Any
+from utils import fetch_product_page
 
 # List of products to check if they are in stock.
 TARGET_URLS = {
@@ -24,43 +24,21 @@ TARGET_URLS = {
 # Dictionary to keep track of stock status
 stock_status = {product: False for product in TARGET_URLS}
 
-
-def retry(retries: int = 3, delay: int = 5):
-    def decorator(func):
-        async def wrapper(*args, **kwargs):
-            for attempt in range(retries):
-                try:
-                    return await func(*args, **kwargs)
-                except aiohttp.ClientError as e:
-                    logging.error(f"Attempt {attempt + 1} failed: {e}")
-                    if attempt < retries - 1:
-                        await asyncio.sleep(delay)
-            raise Exception(f"All {retries} attempts failed.")
-
-        return wrapper
-
-    return decorator
+# Constants for time intervals
+CHECK_STOCK_INTERVAL = 15  # seconds
+CLEAN_LOGS_INTERVAL = 168  # hours
 
 
 # Send message to discord channel
-async def send_message(message: str) -> None:
+async def send_message(client: discord.Client, channel_id: int, message: str) -> None:
     try:
-        channel = client.get_channel(int(DISCORD_CHANNEL_ID))
+        channel = client.get_channel(channel_id)
         if channel:
             await channel.send(message)
         else:
-            logging.error(f"Channel with ID {DISCORD_CHANNEL_ID} not found.")
+            logging.error(f"Channel with ID {channel_id} not found.")
     except discord.DiscordException as e:
         logging.error(f"Error sending message to discord channel: {e}")
-
-
-@retry()
-async def fetch_product_page(url: str) -> str:
-    async with aiohttp.ClientSession() as session:
-        async with session.get(url) as response:
-            if response.status != 200:
-                raise aiohttp.ClientError(f"Failed to fetch {url}: Status code {response.status}")
-            return await response.text()
 
 
 def parse_stock_status(content: str, selector: str) -> bool:
@@ -68,29 +46,34 @@ def parse_stock_status(content: str, selector: str) -> bool:
     return bool(soup.select_one(selector))
 
 
-async def check_product_stock(product: str, info: Dict[str, Any]) -> None:
+async def check_product_stock(client: discord.Client, channel_id: int, product: str, info: Dict[str, Any]) -> None:
     try:
         content = await fetch_product_page(info["url"])
         in_stock = parse_stock_status(content, info["Selector"])
+        if in_stock and stock_status[product]:
+            logging.info(f"{product} No message sent still in stock: {info['url']}")
         if in_stock and not stock_status[product]:
             stock_status[product] = True
-            await send_message(f"{product} is in stock: {info['url']}")
-        elif not in_stock and stock_status[product]:
-            stock_status[product] = False
-            logging.warning(f"{product} is out of stock: {info['url']}")
+            await send_message(client, channel_id, f"{product} is in stock: {info['url']}")
+        elif not in_stock:
+            if stock_status[product]:
+                stock_status[product] = False
+                logging.warning(f"{product} is out of stock: {info['url']}")
+            else:
+                logging.info(f"{product} is still out of stock: {info['url']}")
     except Exception as e:
         logging.error(f"Error checking stock for {product}: {e}")
 
 
-@tasks.loop(seconds=15)
-async def check_stock():
+@tasks.loop(seconds=CHECK_STOCK_INTERVAL)
+async def check_stock(client: discord.Client, channel_id: int):
     logging.debug("check_stock task is running")
     for product, info in TARGET_URLS.items():
-        await check_product_stock(product, info)
+        await check_product_stock(client, channel_id, product, info)
 
 
 # Every week on Monday, lets clean up the logs file.
-@tasks.loop(hours=168)
+@tasks.loop(hours=CLEAN_LOGS_INTERVAL)
 async def clean_logs():
     logging.debug("clean_logs task is running")
     try:
@@ -110,12 +93,12 @@ class MyClient(discord.Client):
     async def on_ready(self):
         logging.info(f"Logged in as {self.user}")
         if not check_stock.is_running():
-            check_stock.start()
+            check_stock.start(self, int(self.channel_id))
         if not clean_logs.is_running():
             clean_logs.start()
 
 
-if __name__ == "__main__":
+async def main():
     # Logging
     if not os.path.exists("logs"):
         os.makedirs("logs")
@@ -143,5 +126,10 @@ if __name__ == "__main__":
     # Discord bot client
     intents = discord.Intents.default()
     client = MyClient(intents=intents)
+    client.channel_id = DISCORD_CHANNEL_ID
 
-    client.run(DISCORD_TOKEN)
+    await client.start(DISCORD_TOKEN)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
