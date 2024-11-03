@@ -21,10 +21,6 @@ TARGET_URLS = {
     },
 }
 
-# Example of other methods to check items.
-# "Product 2": {"url": "https://example.com/product2", "selector": ".add-to-cart-button"},
-# "Product 3": {"url": "https://example.com/product3", "selector": "#add-to-cart"},
-
 # Dictionary to keep track of stock status
 stock_status = {product: False for product in TARGET_URLS}
 
@@ -35,7 +31,7 @@ def retry(retries: int = 3, delay: int = 5):
             for attempt in range(retries):
                 try:
                     return await func(*args, **kwargs)
-                except Exception as e:
+                except aiohttp.ClientError as e:
                     logging.error(f"Attempt {attempt + 1} failed: {e}")
                     if attempt < retries - 1:
                         await asyncio.sleep(delay)
@@ -54,7 +50,7 @@ async def send_message(message: str) -> None:
             await channel.send(message)
         else:
             logging.error(f"Channel with ID {DISCORD_CHANNEL_ID} not found.")
-    except Exception as e:
+    except discord.DiscordException as e:
         logging.error(f"Error sending message to discord channel: {e}")
 
 
@@ -63,7 +59,7 @@ async def fetch_product_page(url: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status != 200:
-                raise Exception(f"Failed to fetch {url}: Status code {response.status}")
+                raise aiohttp.ClientError(f"Failed to fetch {url}: Status code {response.status}")
             return await response.text()
 
 
@@ -125,7 +121,7 @@ if __name__ == "__main__":
         os.makedirs("logs")
 
     logging.basicConfig(
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler("logs/ui_stock_bot.log"),

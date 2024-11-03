@@ -11,6 +11,7 @@ idna==3.10
 multidict==6.1.0
 python-decouple==3.8
 requests==2.28.2
+ruff==0.7.2
 soupsieve==2.6
 urllib3==1.26.20
 yarl==1.12.1
