@@ -1,22 +1,23 @@
 import discord
+import os
+import logging
+import asyncio
+import aiohttp
 from discord.ext import tasks
 from decouple import config
 from bs4 import BeautifulSoup
-
-import os
-import requests
-import logging
 from datetime import datetime
+from typing import Dict, Any
 
 # List of products to check if they are in stock.
 TARGET_URLS = {
     "G5 PTZ": {
         "url": "https://store.ui.com/us/en/category/all-cameras-nvrs/products/uvc-g5-ptz",
-        "selector": "button[label='Add to Cart']",
+        "Selector": "button[label='Add to Cart']",
     },
     "G5 Turret Ultra": {
         "url": "https://store.ui.com/us/en/category/cameras-dome-turret/products/uvc-g5-turret-ultra?variant=uvc-g5-turret-ultra",
-        "selector": "button[label='Add to Cart']",
+        "Selector": "button[label='Add to Cart']",
     },
 }
 
@@ -26,6 +27,23 @@ TARGET_URLS = {
 
 # Dictionary to keep track of stock status
 stock_status = {product: False for product in TARGET_URLS}
+
+
+def retry(retries: int = 3, delay: int = 5):
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            for attempt in range(retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    logging.error(f"Attempt {attempt + 1} failed: {e}")
+                    if attempt < retries - 1:
+                        await asyncio.sleep(delay)
+            raise Exception(f"All {retries} attempts failed.")
+
+        return wrapper
+
+    return decorator
 
 
 # Send message to discord channel
@@ -40,37 +58,39 @@ async def send_message(message: str) -> None:
         logging.error(f"Error sending message to discord channel: {e}")
 
 
-# Check if the product is in stock
+@retry()
+async def fetch_product_page(url: str) -> str:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            if response.status != 200:
+                raise Exception(f"Failed to fetch {url}: Status code {response.status}")
+            return await response.text()
+
+
+def parse_stock_status(content: str, selector: str) -> bool:
+    soup = BeautifulSoup(content, "html.parser")
+    return bool(soup.select_one(selector))
+
+
+async def check_product_stock(product: str, info: Dict[str, Any]) -> None:
+    try:
+        content = await fetch_product_page(info["url"])
+        in_stock = parse_stock_status(content, info["Selector"])
+        if in_stock and not stock_status[product]:
+            stock_status[product] = True
+            await send_message(f"{product} is in stock: {info['url']}")
+        elif not in_stock and stock_status[product]:
+            stock_status[product] = False
+            logging.warning(f"{product} is out of stock: {info['url']}")
+    except Exception as e:
+        logging.error(f"Error checking stock for {product}: {e}")
+
+
 @tasks.loop(seconds=15)
 async def check_stock():
     logging.debug("check_stock task is running")
-    try:
-        for product, info in TARGET_URLS.items():
-            url = info["url"]
-            selector = info["selector"]
-            logging.info(f"Checking stock for {product} at {url}")
-            response = requests.get(url)
-            if response.status_code != 200:
-                logging.error(f"Failed to fetch {url}: Status code {response.status_code}")
-                continue
-
-            soup = BeautifulSoup(response.content, "html.parser")
-            add_to_cart_button = soup.select_one(selector)
-            if add_to_cart_button:
-                if not stock_status[product]:
-                    logging.info(f"{product} is in stock. Sent message to discord channel.")
-                    await send_message(f"{product} is in stock: {url}")
-                    stock_status[product] = True
-                else:
-                    logging.warning(f"{product} is in stock but notification already sent.")
-            else:
-                if stock_status[product]:
-                    logging.info(f"{product} is out of stock. It was last checked at {datetime.now()}")
-                    stock_status[product] = False
-                else:
-                    logging.info(f"No 'Add to Cart' button found for {product} at {url} using selector '{selector}'")
-    except Exception as e:
-        logging.error(f"Error checking stock: {e}")
+    for product, info in TARGET_URLS.items():
+        await check_product_stock(product, info)
 
 
 # Every week on Monday, lets clean up the logs file.
@@ -93,8 +113,10 @@ async def clean_logs():
 class MyClient(discord.Client):
     async def on_ready(self):
         logging.info(f"Logged in as {self.user}")
-        check_stock.start()
-        clean_logs.start()
+        if not check_stock.is_running():
+            check_stock.start()
+        if not clean_logs.is_running():
+            clean_logs.start()
 
 
 if __name__ == "__main__":
@@ -103,7 +125,7 @@ if __name__ == "__main__":
         os.makedirs("logs")
 
     logging.basicConfig(
-        level=logging.WARNING,
+        level=logging.DEBUG,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler("logs/ui_stock_bot.log"),
@@ -123,6 +145,7 @@ if __name__ == "__main__":
         exit(1)
 
     # Discord bot client
-    client = MyClient(intents=discord.Intents.default())
+    intents = discord.Intents.default()
+    client = MyClient(intents=intents)
 
     client.run(DISCORD_TOKEN)
