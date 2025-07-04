@@ -19,6 +19,10 @@ TARGET_URLS = {
         "url": "https://store.ui.com/us/en/category/cameras-dome-turret/products/uvc-g5-turret-ultra?variant=uvc-g5-turret-ultra",
         "Selector": "button[label='Add to Cart']",
     },
+    "E3D High Flow": {
+        "url": "https://us.store.bambulab.com/products/obxidian-high-flow-hotend?id=612483524149776385",
+        "Selector": "button.ProductForm__AddToCart[data-action=\"add-to-cart\"]"
+    },
 }
 
 # Dictionary to keep track of stock status
