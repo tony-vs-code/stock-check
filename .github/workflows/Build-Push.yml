@@ -40,6 +40,8 @@ jobs:
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Push Docker image
       run: docker push ghcr.io/tony-vs-code/stock-check:latest
