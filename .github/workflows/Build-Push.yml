@@ -31,6 +31,14 @@ jobs:
     - name: Build Docker image
       run: docker build -t ghcr.io/tony-vs-code/stock-check:latest .
 
+  push:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v3
       with:
