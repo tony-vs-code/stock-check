@@ -32,22 +32,8 @@ jobs:
       uses: docker/login-action@v3
       with:
         registry: ghcr.io
-
-    - name: Push temporary Docker image
-      run: docker push ghcr.io/tony-vs-code/stock-check:latest
-
-  push:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Log in to GitHub Container Registry
-      uses: docker/login-action@v3
-      with:
-        registry: ghcr.io
-
-    - name: Pull Docker image
-      run: docker pull ghcr.io/tony-vs-code/stock-check:latest
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Push Docker image
       run: docker push ghcr.io/tony-vs-code/stock-check:latest
