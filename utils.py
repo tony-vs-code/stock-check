@@ -26,5 +26,7 @@ async def fetch_product_page(url: str) -> str:
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as response:
             if response.status != 200:
-                raise aiohttp.ClientError(f"Failed to fetch {url}: Status code {response.status}")
+                raise aiohttp.ClientError(
+                    f"Failed to fetch {url}: Status code {response.status}"
+                )
             return await response.text()
