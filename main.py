@@ -12,16 +12,13 @@ import logging.handlers  # Import for RotatingFileHandler
 from pathlib import Path  # For cleaner path manipulation in clean_logs
 
 # --- Environment Variable Loading ---
-# Load environment variables, providing default values and casting to appropriate types
-DISCORD_TOKEN = config(
-    "DISCORD_TOKEN", default=""
-)  # Provide a default empty string
+# Load environment variables, providing default values and
+# casting to appropriate types
+DISCORD_TOKEN = config("DISCORD_TOKEN", default="")  # Provide a default empty string
 DISCORD_CHANNEL_ID = config(
     "DISCORD_CHANNEL_ID", default=0, cast=int
 )  # Default 0 will trigger check
-CHECK_STOCK_INTERVAL = config(
-    "CHECK_STOCK_INTERVAL", default=15, cast=int
-)  # seconds
+CHECK_STOCK_INTERVAL = config("CHECK_STOCK_INTERVAL", default=15, cast=int)  # seconds
 CLEAN_LOGS_INTERVAL = config(
     "CLEAN_LOGS_INTERVAL", default=168, cast=int
 )  # hours (7 days)
@@ -43,9 +40,7 @@ stock_status = {product: False for product in TARGET_URLS}
 
 
 # Send message to discord channel
-async def send_message(
-    client: discord.Client, channel_id: int, message: str
-) -> None:
+async def send_message(client: discord.Client, channel_id: int, message: str) -> None:
     """Sends a message to the specified Discord channel."""
     try:
         channel = client.get_channel(channel_id)
@@ -57,7 +52,8 @@ async def send_message(
             logging.info(f"Message sent successfully to channel {channel_id}.")
         else:
             logging.error(
-                f"Could not find Discord channel with ID: {channel_id}. Please check DISCORD_CHANNEL_ID."
+                f"Could not find Discord channel with ID: {channel_id}. "
+                "Please check DISCORD_CHANNEL_ID."
             )
     except discord.errors.Forbidden:
         logging.error(
@@ -65,11 +61,13 @@ async def send_message(
         )
     except discord.errors.HTTPException as e:
         logging.error(
-            f"HTTP exception occurred while sending message to channel {channel_id}: {e}"
+            f"HTTP exception occurred while sending message to channel "
+            f"{channel_id}: {e}"
         )
     except Exception as e:
         logging.error(
-            f"An unexpected error occurred while sending message to channel {channel_id}: {e}"
+            f"An unexpected error occurred while sending message to channel "
+            f"{channel_id}: {e}"
         )
 
 
@@ -88,9 +86,7 @@ async def check_product_stock(
         in_stock = parse_stock_status(content, info["Selector"])
 
         if in_stock and stock_status[product]:
-            logging.info(
-                f"{product} No message sent, still in stock: {info['url']}"
-            )
+            logging.info(f"{product} No message sent, still in stock: {info['url']}")
         elif in_stock and not stock_status[product]:
             stock_status[product] = True
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -135,9 +131,7 @@ async def clean_logs():
                 and file_path.name != current_log_file_name
             ):
                 # Check if the file was modified more than a week ago (7 days)
-                seven_days_ago = datetime.now().timestamp() - (
-                    7 * 24 * 60 * 60
-                )
+                seven_days_ago = datetime.now().timestamp() - (7 * 24 * 60 * 60)
                 if file_path.stat().st_mtime < seven_days_ago:
                     os.remove(file_path)
                     logging.info(f"Deleted old log file: {file_path}")
@@ -160,8 +154,6 @@ class MyClient(discord.Client):
             logging.critical(
                 "Discord channel ID is not set or invalid. Bot cannot send messages."
             )
-            # Optionally, you might want to stop the bot here if it's can't function without channel
-            # await self.close()
             return
 
         if not check_stock.is_running():
@@ -216,17 +208,11 @@ async def main():
     root_logger.addHandler(file_handler)
     root_logger.addHandler(stream_handler)
 
-    # Removed: open("logs/ui_stock_bot.log", "w").close() - This line used to clear logs.
-
     # 2. Check for required environment variables
     if not DISCORD_TOKEN:
-        root_logger.critical(
-            "DISCORD_TOKEN is not set in the .env file. Exiting."
-        )
+        root_logger.critical("DISCORD_TOKEN is not set in the .env file. Exiting.")
         exit(1)
-    if (
-        not DISCORD_CHANNEL_ID
-    ):  # This will be 0 if default is used and no env var set
+    if not DISCORD_CHANNEL_ID:  # This will be 0 if default is used and no env var set
         root_logger.critical(
             "DISCORD_CHANNEL_ID is not set or invalid in the .env file. Exiting."
         )
@@ -236,17 +222,13 @@ async def main():
     intents = discord.Intents.default()
 
     client = MyClient(intents=intents)
-    client.channel_id = (
-        DISCORD_CHANNEL_ID  # Pass the channel ID to the client instance
-    )
+    client.channel_id = DISCORD_CHANNEL_ID  # Pass the channel ID to the client instance
 
     # 4. Start the Discord bot
     try:
         await client.start(DISCORD_TOKEN)
     except discord.LoginFailure:
-        root_logger.critical(
-            "Failed to log in to Discord. Invalid DISCORD_TOKEN."
-        )
+        root_logger.critical("Failed to log in to Discord. Invalid DISCORD_TOKEN.")
         exit(1)
     except discord.HTTPException as e:
         root_logger.critical(

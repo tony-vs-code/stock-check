@@ -1,0 +1,11 @@
+{
+    "window.commandCenter": true,
+    "git.openRepositoryInParentFolders": "never",
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "ruff.enable": true,
+    "ruff.organizeImports": true,
+    "ruff.fixAll": true,
+    "ruff.lint.enable": true,
+    "ruff.format.enable": false
+}
