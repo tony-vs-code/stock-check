@@ -13,6 +13,9 @@ COPY . .
 # Install dependencies using uv
 RUN uv sync --frozen
 
+# Create directories for persistent data (volumes will mount here)
+RUN mkdir -p /usr/src/app/data /usr/src/app/logs
+
 # Make port 80 available to the world outside this container
 EXPOSE 80
 
