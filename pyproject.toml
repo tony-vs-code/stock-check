@@ -37,3 +37,10 @@ line-length = 88
 # overlap with the use of a formatter, like Black, but we can override this behavior by
 # explicitly adding the rule.
 extend-select = ["E501"]
+
+[tool.ruff.format]
+# Enable Ruff's formatter
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
