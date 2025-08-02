@@ -12,7 +12,7 @@ from config import DATA_DIR, PRODUCTS_FILE
 @dataclass
 class Product:
     """Represents a product to monitor for stock availability."""
-    
+
     name: str
     url: str
     selector: str
@@ -20,25 +20,17 @@ class Product:
 
     def to_dict(self) -> Dict[str, str]:
         """Convert product to dictionary for JSON serialization."""
-        return {
-            "name": self.name,
-            "url": self.url,
-            "selector": self.selector
-        }
+        return {"name": self.name, "url": self.url, "selector": self.selector}
 
     @classmethod
     def from_dict(cls, data: Dict[str, str]) -> "Product":
         """Create product from dictionary."""
-        return cls(
-            name=data["name"],
-            url=data["url"],
-            selector=data["selector"]
-        )
+        return cls(name=data["name"], url=data["url"], selector=data["selector"])
 
 
 class ProductManager:
     """Manages product persistence and operations."""
-    
+
     def __init__(self):
         self.products: Dict[str, Product] = {}
         self.load_products()
@@ -46,7 +38,7 @@ class ProductManager:
     def load_products(self) -> None:
         """Load products from JSON file."""
         os.makedirs(DATA_DIR, exist_ok=True)
-        
+
         if not os.path.exists(PRODUCTS_FILE):
             logging.info(
                 f"No products file found. Creating empty file at {PRODUCTS_FILE}"
@@ -60,11 +52,10 @@ class ProductManager:
                 if not content:
                     logging.info("Products file is empty. Creating empty list.")
                     return
-                
+
                 products_data = json.loads(content)
                 self.products = {
-                    item["name"]: Product.from_dict(item)
-                    for item in products_data
+                    item["name"]: Product.from_dict(item) for item in products_data
                 }
                 logging.info(f"Loaded {len(self.products)} products")
         except (json.JSONDecodeError, KeyError) as e:
@@ -75,7 +66,7 @@ class ProductManager:
     def save_products(self) -> None:
         """Save products to JSON file."""
         products_list = [product.to_dict() for product in self.products.values()]
-        
+
         try:
             with open(PRODUCTS_FILE, "w", encoding="utf-8") as f:
                 json.dump(products_list, f, indent=2)
@@ -87,7 +78,7 @@ class ProductManager:
         """Add a new product. Returns True if successful, False if already exists."""
         if name in self.products:
             return False
-        
+
         self.products[name] = Product(name=name, url=url, selector=selector)
         self.save_products()
         return True
@@ -96,7 +87,7 @@ class ProductManager:
         """Remove a product. Returns True if successful, False if not found."""
         if name not in self.products:
             return False
-        
+
         del self.products[name]
         self.save_products()
         return True
@@ -117,11 +108,10 @@ class ProductManager:
         """Get formatted list of products for display."""
         if not self.products:
             return "No products are currently being monitored."
-        
+
         product_list = "\n".join(
             [f"• **{name}**: {product.url}" for name, product in self.products.items()]
         )
         return (
-            f"**Currently Monitoring ({len(self.products)} products):**\n"
-            f"{product_list}"
+            f"**Currently Monitoring ({len(self.products)} products):**\n{product_list}"
         )

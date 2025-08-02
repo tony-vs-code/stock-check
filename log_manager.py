@@ -11,7 +11,7 @@ from config import LOG_DIR, LOG_FILE
 
 class LogManager:
     """Manages logging configuration and cleanup."""
-    
+
     @staticmethod
     def setup_logging() -> None:
         """Configure logging with file rotation and console output."""

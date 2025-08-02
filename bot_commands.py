@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 class BotCommands:
     """Contains all Discord bot slash commands."""
-    
+
     def __init__(self, product_manager: "ProductManager"):
         self.product_manager = product_manager
 
@@ -75,7 +75,7 @@ class BotCommands:
 def create_commands(product_manager: "ProductManager"):
     """Create command instances that can be added to the command tree."""
     bot_commands = BotCommands(product_manager)
-    
+
     @discord.app_commands.command(
         name="ping", description="Test if the bot is responding"
     )
@@ -104,5 +104,5 @@ def create_commands(product_manager: "ProductManager"):
     )
     async def list_products(interaction: discord.Interaction):
         await bot_commands.list_products(interaction)
-    
+
     return ping, add_product, remove_product, list_products

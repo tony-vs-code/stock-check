@@ -23,7 +23,7 @@ class UBStockClient(discord.Client):
         channel_id: int,
         product_manager: "ProductManager",
         *args,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(intents=intents, *args, **kwargs)
         self.channel_id = channel_id
@@ -34,24 +34,24 @@ class UBStockClient(discord.Client):
     async def setup_hook(self):
         """Called when the client is ready to sync commands."""
         logging.info("Setting up slash commands...")
-        
+
         # Import and add commands to the tree
         from bot_commands import create_commands
+
         ping, add_product, remove_product, list_products = create_commands(
             self.product_manager
         )
-        
+
         self.tree.add_command(ping)
         self.tree.add_command(add_product)
         self.tree.add_command(remove_product)
         self.tree.add_command(list_products)
-        
+
         # List all commands before syncing
         logging.info(
-            "Commands to sync: %s",
-            [cmd.name for cmd in self.tree.get_commands()]
+            "Commands to sync: %s", [cmd.name for cmd in self.tree.get_commands()]
         )
-        
+
         try:
             synced = await self.tree.sync()
             logging.info(f"Successfully synced {len(synced)} command(s)")
@@ -60,6 +60,7 @@ class UBStockClient(discord.Client):
         except Exception as e:
             logging.error(f"Failed to sync commands: {e}")
             import traceback
+
             logging.error(traceback.format_exc())
 
     async def send_startup_message_if_needed(self):
@@ -82,7 +83,7 @@ class UBStockClient(discord.Client):
 `/add_product name:Custom Item url:https://example.com/product selector:.buy-now-button`
 
 Get started by adding your first product! 🚀"""
-                    
+
                     await channel.send(startup_message)
                     logging.info("Sent startup message with command instructions")
                     self.startup_message_sent = True
@@ -97,7 +98,7 @@ Get started by adding your first product! 🚀"""
         """Called when the bot successfully connects to Discord."""
         logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
         logging.info(f"Connected to {len(self.guilds)} guild(s)")
-        
+
         # Log guild information
         for guild in self.guilds:
             logging.info(f"  - Guild: {guild.name} (ID: {guild.id})")
@@ -126,7 +127,7 @@ Get started by adding your first product! 🚀"""
                     f"Found channel: {channel.name} (ID: {channel.id}) "
                     f"in guild: {channel.guild.name}"
                 )
-                
+
                 # Check channel-specific permissions
                 perms = channel.permissions_for(channel.guild.me)
                 logging.info(

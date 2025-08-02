@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 class StockChecker:
     """Handles stock checking and notifications."""
-    
+
     @staticmethod
     def parse_stock_status(content: str, selector: str) -> bool:
         """Parse HTML content to check for stock availability."""
@@ -43,7 +43,7 @@ class StockChecker:
         channel_id: int,
         product: Product,
         was_in_stock: bool,
-        is_in_stock: bool
+        is_in_stock: bool,
     ) -> None:
         """Send stock notification to Discord channel."""
         try:
@@ -52,7 +52,7 @@ class StockChecker:
                 logging.error(f"Could not find Discord channel with ID: {channel_id}")
                 return
 
-            # Only send notification if stock status changed from out-of-stock 
+            # Only send notification if stock status changed from out-of-stock
             # to in-stock
             if is_in_stock and not was_in_stock:
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -74,17 +74,15 @@ class StockChecker:
 
     @staticmethod
     async def check_all_products(
-        client: "discord.Client",
-        channel_id: int,
-        products: dict[str, Product]
+        client: "discord.Client", channel_id: int, products: dict[str, Product]
     ) -> None:
         """Check stock for all products and send notifications."""
         logging.debug("Checking stock for all products")
-        
+
         for product in products.values():
             was_in_stock = product.in_stock
             is_in_stock, error = await StockChecker.check_single_product(product)
-            
+
             if error is None:  # Only update and notify if check was successful
                 product.in_stock = is_in_stock
                 await StockChecker.send_stock_notification(

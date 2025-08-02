@@ -21,10 +21,10 @@ async def main():
     """Main function to set up and run the Discord bot."""
     # Setup logging
     LogManager.setup_logging()
-    
+
     # Load products
     product_manager = ProductManager()
-    
+
     # Validate environment variables
     if not DISCORD_TOKEN:
         logging.critical("DISCORD_TOKEN is not set in the .env file. Exiting.")
@@ -38,9 +38,7 @@ async def main():
     # Setup Discord client
     intents = discord.Intents.default()
     client = UBStockClient(
-        intents=intents,
-        channel_id=DISCORD_CHANNEL_ID,
-        product_manager=product_manager
+        intents=intents, channel_id=DISCORD_CHANNEL_ID, product_manager=product_manager
     )
 
     # Start the Discord bot
@@ -50,9 +48,7 @@ async def main():
         logging.critical("Failed to log in to Discord. Invalid DISCORD_TOKEN.")
         sys.exit(1)
     except discord.HTTPException as e:
-        logging.critical(
-            f"HTTP Exception occurred during Discord client startup: {e}"
-        )
+        logging.critical(f"HTTP Exception occurred during Discord client startup: {e}")
         sys.exit(1)
     except Exception as e:
         logging.critical(
