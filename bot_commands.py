@@ -1,8 +1,9 @@
 """Discord bot commands for UB Stock Bot."""
 
-import discord
 import logging
 from typing import TYPE_CHECKING
+
+import discord
 
 from config import DEFAULT_SELECTOR
 
@@ -16,9 +17,6 @@ class BotCommands:
     def __init__(self, product_manager: "ProductManager"):
         self.product_manager = product_manager
 
-    @discord.app_commands.command(
-        name="ping", description="Test if the bot is responding"
-    )
     async def ping(self, interaction: discord.Interaction):
         """Simple ping command to test bot responsiveness."""
         await interaction.response.send_message(
@@ -26,9 +24,6 @@ class BotCommands:
         )
         logging.info(f"Ping command used by {interaction.user}")
 
-    @discord.app_commands.command(
-        name="add_product", description="Add a new product to monitor"
-    )
     async def add_product(
         self,
         interaction: discord.Interaction,
@@ -38,18 +33,24 @@ class BotCommands:
     ):
         """Add a new product to the monitoring list."""
         if self.product_manager.add_product(name, url, selector):
-            await interaction.response.send_message(
-                f"✅ Added product '{name}' to monitoring list!"
-            )
+            # Create a more detailed response
+            response = f"""✅ **Successfully added product to monitoring!**
+
+**Product:** {name}
+**URL:** {url}
+**Selector:** `{selector}`
+
+The bot will now check this product every 15 seconds and notify when it comes 
+back in stock! 🚀"""
+
+            await interaction.response.send_message(response)
             logging.info(f"Added product '{name}' by {interaction.user}")
         else:
             await interaction.response.send_message(
-                f"Product '{name}' already exists!", ephemeral=True
+                f"❌ Product '{name}' already exists in the monitoring list!",
+                ephemeral=True,
             )
 
-    @discord.app_commands.command(
-        name="remove_product", description="Remove a product from monitoring"
-    )
     async def remove_product(self, interaction: discord.Interaction, name: str):
         """Remove a product from the monitoring list."""
         if self.product_manager.remove_product(name):
@@ -62,9 +63,6 @@ class BotCommands:
                 f"Product '{name}' not found!", ephemeral=True
             )
 
-    @discord.app_commands.command(
-        name="list_products", description="List all monitored products"
-    )
     async def list_products(self, interaction: discord.Interaction):
         """List all currently monitored products."""
         message = self.product_manager.get_product_list_display()

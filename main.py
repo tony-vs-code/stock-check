@@ -11,7 +11,7 @@ import sys
 
 import discord
 
-from config import DISCORD_TOKEN, DISCORD_CHANNEL_ID
+from config import DISCORD_CHANNEL_ID, DISCORD_TOKEN
 from discord_client import UBStockClient
 from log_manager import LogManager
 from product_manager import ProductManager
