@@ -9,9 +9,10 @@ Stock-Check is a stock manager system designed to help watch for when something 
 
 ## Prerequisites
 
-- Python 3.9 or higher
+- Python 3.11 (managed by pyenv via `.python-version`)
 - Node.js (if using the Node.js version)
 - Docker (optional, for containerized deployment)
+- uv (optional, for faster Python package management)
 
 ## Installation
 
@@ -24,6 +25,8 @@ Stock-Check is a stock manager system designed to help watch for when something 
     ```bash
     cd stock-check
     ```
+
+### Option 1: Using pip (Traditional)
 3. Install dependencies:
     ```bash
     pip install -r requirements.txt
@@ -40,6 +43,23 @@ Stock-Check is a stock manager system designed to help watch for when something 
     python main.py
     ```
 
+### Option 2: Using uv (Recommended)
+3. Install dependencies with uv:
+    ```bash
+    uv sync
+    ```
+4. Set up the environment variables:
+    ```bash
+    cp .env.example .env
+    ```
+> [!NOTE]  
+> Make sure you provide your own values!
+    
+5. Run the application with uv:
+    ```bash
+    uv run python main.py
+    ```
+
 ## Environment Variables
 
 - `DISCORD_TOKEN`: Your Discord bot token.
@@ -47,20 +67,67 @@ Stock-Check is a stock manager system designed to help watch for when something 
 
 ## Docker Instructions
 
+### Using Pre-built Image
+The easiest way to run Stock-Check with Docker is using the pre-built image:
+
 [Latest Tag](https://github.com/tony-vs-code/stock-check/pkgs/container/stock-check/299502125?tag=latest)
 
+1. Pull the Docker image:
+    ```bash
+    docker pull ghcr.io/tony-vs-code/stock-check:latest
+    ```
+
+2. Run the Docker container:
+    ```bash
+    docker run -d \
+      --name stock-check \
+      --env-file .env \
+      -v $(pwd)/logs:/app/logs \
+      ghcr.io/tony-vs-code/stock-check:latest
+    ```
+
+### Building from Source
 1. Build the Docker image:
     ```bash
     docker build -t stock-check .
     ```
+
 2. Run the Docker container:
     ```bash
-    docker run -d -p 80:80 --env-file .env stock-check
+    docker run -d \
+      --name stock-check \
+      --env-file .env \
+      -v $(pwd)/logs:/app/logs \
+      stock-check
+    ```
+
+### Docker Compose (Optional)
+For easier management, you can use Docker Compose:
+
+1. Create a `docker-compose.yml` file:
+    ```yaml
+    version: '3.8'
+    services:
+      stock-check:
+        image: ghcr.io/tony-vs-code/stock-check:latest
+        container_name: stock-check
+        env_file:
+          - .env
+        volumes:
+          - ./logs:/app/logs
+        restart: unless-stopped
+    ```
+
+2. Run with Docker Compose:
+    ```bash
+    docker-compose up -d
     ```
 
 ## Logging
 
 Logs are stored in the `logs` directory. The main log file is `logs/ui_stock_bot.log`. The log file is reset each time the application starts. Old log files are automatically cleaned up every week.
+
+When using Docker, logs are persisted in the mounted volume `./logs:/app/logs`.
 
 ## Usage
 
@@ -73,6 +140,12 @@ A: You can create a new bot and get a token from the Discord Developer Portal.
 
 **Q: What should I do if the bot is not sending messages?**
 A: Ensure that the bot has the correct permissions and that the environment variables are set correctly.
+
+**Q: What's the difference between pip and uv?**
+A: uv is a much faster Python package installer and resolver written in Rust. It's significantly faster than pip and provides better dependency resolution.
+
+**Q: How do I check the Docker container logs?**
+A: Use `docker logs stock-check` to view the container logs.
 
 ## Contributing
 
