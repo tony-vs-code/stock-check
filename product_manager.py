@@ -110,7 +110,10 @@ class ProductManager:
             return "No products are currently being monitored."
 
         product_list = "\n".join(
-            [f"• **{name}**: {product.url}" for name, product in self.products.items()]
+            [
+                f"• **{name}**: <{product.url}>"
+                for name, product in self.products.items()
+            ]
         )
         return (
             f"**Currently Monitoring ({len(self.products)} products):**\n{product_list}"

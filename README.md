@@ -12,6 +12,8 @@ UB Stock Bot is a sophisticated Discord bot designed to monitor product stock av
 - **Automatic Log Management**: Log rotation and cleanup to prevent disk space issues
 - **Docker Support**: Easy deployment with containerization
 - **Modular Architecture**: Clean, maintainable codebase split into focused modules
+- **Enhanced User Feedback**: Detailed responses for all commands with clear confirmation messages
+- **Clean List Display**: Product URLs shown without Discord previews to prevent clutter
 
 ## 🏗️ Architecture
 
@@ -41,15 +43,16 @@ ubstock/
 
 ## 🚀 Discord Commands
 
-The bot provides intuitive slash commands:
+The bot provides intuitive slash commands with detailed feedback:
 
 - `/ping` - Test bot responsiveness
 - `/add_product` - Add a new product to monitor
   - `name`: Product display name
   - `url`: Product page URL
   - `selector`: CSS selector for stock button (optional, defaults to `button[label='Add to Cart']`)
+  - **Enhanced Response**: Shows detailed confirmation with product info and monitoring details
 - `/remove_product` - Remove a product from monitoring
-- `/list_products` - Display all monitored products
+- `/list_products` - Display all monitored products (URLs shown without previews for clean display)
 
 ### Example Usage
 ```
@@ -281,11 +284,24 @@ The bot logs important events:
    /add_product name:UVC G5 PTZ url:https://store.ui.com/us/en/products/uvc-g5-ptz
    ```
    *This uses the default CSS selector: `button[label='Add to Cart']`*
+   
+   **Bot Response:**
+   ```
+   ✅ Successfully added product to monitoring!
+   
+   Product: UVC G5 PTZ
+   URL: https://store.ui.com/us/en/products/uvc-g5-ptz
+   Selector: button[label='Add to Cart']
+   
+   The bot will now check this product every 15 seconds and notify when it comes 
+   back in stock! 🚀
+   ```
 
 2. **List monitored products**:
    ```
    /list_products
    ```
+   *URLs are displayed without Discord previews for clean viewing*
 
 3. **Remove a product**:
    ```
@@ -334,6 +350,15 @@ When a product comes back in stock, you'll receive a notification like:
 
 ## 🔧 Development
 
+### Recent Improvements
+
+- ✅ **Modular Refactoring**: Complete code restructure into focused modules
+- ✅ **Enhanced Command Responses**: Detailed feedback for all Discord commands  
+- ✅ **Clean List Display**: URLs shown without Discord previews
+- ✅ **Format-on-Save**: VS Code configuration for automatic code formatting
+- ✅ **Type Safety**: Full type hint coverage across all modules
+- ✅ **Error Handling**: Comprehensive error handling and logging improvements
+
 ### Project Structure
 
 The codebase follows a clean, modular architecture:
@@ -343,6 +368,8 @@ The codebase follows a clean, modular architecture:
 - **Error Handling**: Comprehensive error handling and logging
 - **Async/Await**: Efficient asynchronous processing
 - **Configuration Management**: Centralized config with environment variables
+- **Enhanced UX**: Detailed command responses and clean list displays
+- **Code Quality**: Ruff formatting and linting with format-on-save configuration
 
 ### Running Tests
 
@@ -356,8 +383,11 @@ pytest
 # Type checking
 mypy .
 
-# Linting
+# Linting and formatting
 ruff check .
+ruff format .
+
+# VS Code auto-formatting is configured for format-on-save
 ```
 
 ### Contributing
