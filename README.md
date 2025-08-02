@@ -9,7 +9,7 @@ Stock-Check is a stock manager system designed to help watch for when something 
 
 ## Prerequisites
 
-- Python 3.11 (managed by pyenv via `.python-version`)
+- Python 3.11 or higher
 - Node.js (if using the Node.js version)
 - Docker (optional, for containerized deployment)
 - uv (optional, for faster Python package management)
