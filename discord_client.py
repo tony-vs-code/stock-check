@@ -1,41 +1,41 @@
-"""Discord client for UB Stock Bot."""
+"""Discord client and lifecycle manager for UB Stock Bot."""
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import Optional
 
 import discord
 from discord.ext import tasks
 
-from config import CHECK_STOCK_INTERVAL, CLEAN_LOGS_INTERVAL
+from config import CLEAN_LOGS_INTERVAL
+from database import Database
 from log_manager import LogManager
-from stock_checker import StockChecker
+from product_manager import ProductManager
 
-if TYPE_CHECKING:
-    from product_manager import ProductManager
+logger = logging.getLogger(__name__)
 
 
 class UBStockClient(discord.Client):
-    """Custom Discord client for UB Stock Bot."""
+    """Custom Discord client for UB Stock Bot slash commands and status."""
 
     def __init__(
         self,
         intents: discord.Intents,
         channel_id: int,
-        product_manager: "ProductManager",
+        product_manager: ProductManager,
         *args,
         **kwargs,
-    ):
+    ) -> None:
         super().__init__(intents=intents, *args, **kwargs)
         self.channel_id = channel_id
         self.product_manager = product_manager
         self.tree = discord.app_commands.CommandTree(self)
         self.startup_message_sent = False
 
-    async def setup_hook(self):
-        """Called when the client is ready to sync commands."""
-        logging.info("Setting up slash commands...")
+    async def setup_hook(self) -> None:
+        """Register and sync Discord slash commands."""
+        logger.info("Setting up slash commands...")
 
-        # Import and add commands to the tree
         from bot_commands import create_commands
 
         ping, add_product, remove_product, list_products = create_commands(
@@ -47,124 +47,171 @@ class UBStockClient(discord.Client):
         self.tree.add_command(remove_product)
         self.tree.add_command(list_products)
 
-        # List all commands before syncing
-        logging.info(
-            "Commands to sync: %s", [cmd.name for cmd in self.tree.get_commands()]
-        )
-
         try:
             synced = await self.tree.sync()
-            logging.info(f"Successfully synced {len(synced)} command(s)")
-            for cmd in synced:
-                logging.info(f"  ✓ {cmd.name}: {cmd.description}")
-        except Exception as e:
-            logging.error(f"Failed to sync commands: {e}")
-            import traceback
+            logger.info("Successfully synced %d command(s)", len(synced))
+        except Exception as exc:
+            logger.error("Failed to sync commands: %s", exc)
 
-            logging.error(traceback.format_exc())
-
-    async def send_startup_message_if_needed(self):
+    async def send_startup_message_if_needed(self) -> None:
         """Send a helpful message if no products are configured."""
         if self.product_manager.is_empty() and not self.startup_message_sent:
             try:
                 channel = self.get_channel(self.channel_id)
                 if channel:
-                    startup_message = """👋 **UB Stock Bot is ready!**
-
-🚨 **No products are currently being monitored.**
-
-**Available Commands:**
-• `/add_product` - Add a new product to monitor
-• `/list_products` - View all monitored products  
-• `/remove_product` - Remove a product from monitoring
-
-**Examples:**
-`/add_product name:G5 PTZ url:https://store.ui.com/us/en/products/uvc-g5-ptz`
-`/add_product name:Custom Item url:https://example.com/product selector:.buy-now-button`
-
-Get started by adding your first product! 🚀"""
-
+                    startup_message = (
+                        "👋 **UB Stock Bot is ready!**\n\n"
+                        "🚨 **No products are currently being monitored.**\n\n"
+                        "**Available Commands:**\n"
+                        "• `/add_product` - Add a new product to monitor\n"
+                        "• `/list_products` - View all monitored products\n"
+                        "• `/remove_product` - Remove a product from monitoring\n\n"
+                        "You can also manage everything from the Web UI!"
+                    )
                     await channel.send(startup_message)
-                    logging.info("Sent startup message with command instructions")
+                    logger.info("Sent startup message with command instructions")
                     self.startup_message_sent = True
                 else:
-                    logging.error(
-                        f"Could not find Discord channel with ID: {self.channel_id}"
+                    logger.warning(
+                        "Could not find Discord channel with ID: %s", self.channel_id
                     )
-            except Exception as e:
-                logging.error(f"Error sending startup message: {e}")
+            except Exception as exc:
+                logger.error("Error sending startup message: %s", exc)
 
-    async def on_ready(self):
+    async def on_ready(self) -> None:
         """Called when the bot successfully connects to Discord."""
-        logging.info(f"Logged in as {self.user} (ID: {self.user.id})")
-        logging.info(f"Connected to {len(self.guilds)} guild(s)")
-
-        # Log guild information
-        for guild in self.guilds:
-            logging.info(f"  - Guild: {guild.name} (ID: {guild.id})")
-            # Check if bot has relevant permissions
-            me = guild.me
-            if me:
-                perms = me.guild_permissions
-                logging.info(
-                    f"    Bot permissions in {guild.name}: "
-                    f"send_messages={perms.send_messages}, "
-                    f"view_channel={perms.view_channel}, "
-                    f"embed_links={perms.embed_links}"
-                )
+        if self.user:
+            logger.info("Logged in to Discord as %s (ID: %s)", self.user, self.user.id)
+        logger.info("Connected to %d guild(s)", len(self.guilds))
 
         if not self.channel_id:
-            logging.critical(
+            logger.warning(
                 "Discord channel ID is not set or invalid. Bot cannot send messages."
             )
             return
 
-        # Verify channel access
         try:
             channel = self.get_channel(self.channel_id)
             if channel:
-                logging.info(
-                    f"Found channel: {channel.name} (ID: {channel.id}) "
-                    f"in guild: {channel.guild.name}"
-                )
-
-                # Check channel-specific permissions
-                perms = channel.permissions_for(channel.guild.me)
-                logging.info(
-                    f"Channel permissions: send_messages={perms.send_messages}, "
-                    f"view_channel={perms.view_channel}"
+                logger.info(
+                    "Found Discord channel: %s (ID: %s)", channel.name, channel.id
                 )
             else:
-                logging.error(f"Could not find channel with ID: {self.channel_id}")
+                logger.warning("Could not find channel with ID: %s", self.channel_id)
                 return
-        except Exception as e:
-            logging.error(f"Error accessing channel {self.channel_id}: {e}")
+        except Exception as exc:
+            logger.error("Error accessing channel %s: %s", self.channel_id, exc)
             return
 
-        # Send startup message if no products are configured
         await self.send_startup_message_if_needed()
-
-        # Start background tasks
-        if not self.check_stock.is_running():
-            self.check_stock.start()
-            logging.info(
-                f"check_stock task started with interval {CHECK_STOCK_INTERVAL}s"
-            )
 
         if not self.clean_logs.is_running():
             self.clean_logs.start()
-            logging.info(
-                f"clean_logs task started with interval {CLEAN_LOGS_INTERVAL}h"
-            )
-
-    @tasks.loop(seconds=CHECK_STOCK_INTERVAL)
-    async def check_stock(self):
-        """Periodically check stock for all products."""
-        await StockChecker.check_all_products(
-            self, self.channel_id, self.product_manager.get_all_products()
-        )
 
     @tasks.loop(hours=CLEAN_LOGS_INTERVAL)
-    async def clean_logs(self):
+    async def clean_logs(self) -> None:
         """Periodically clean up old log files."""
         LogManager.clean_old_logs()
+
+
+class DiscordManager:
+    """Manages optional Discord client lifecycle without crashing when unconfigured."""
+
+    def __init__(self, db: Database) -> None:
+        self.db = db
+        self.client: Optional[UBStockClient] = None
+        self._task: Optional[asyncio.Task] = None
+        self._active_token: str = ""
+
+    def get_credentials(self) -> tuple[str, str]:
+        """Return (token, channel_id) from database settings."""
+        token = (self.db.get_setting("discord_token", "") or "").strip()
+        channel_id = (self.db.get_setting("discord_channel_id", "") or "").strip()
+        return token, channel_id
+
+    def is_configured(self) -> bool:
+        """Return True if both Discord token and channel ID are set in DB."""
+        token, channel_id = self.get_credentials()
+        return bool(token and channel_id)
+
+    def is_connected(self) -> bool:
+        """Return True if the Discord Gateway client is connected and ready."""
+        return (
+            self.client is not None
+            and not self.client.is_closed()
+            and self.client.is_ready()
+        )
+
+    async def start(self) -> None:
+        """Start Discord client if configured, else log a friendly notice."""
+        token, raw_channel_id = self.get_credentials()
+        if not token or not raw_channel_id:
+            logger.info(
+                "Discord notifications unconfigured. You can configure them "
+                "anytime in the Web UI or via API."
+            )
+            return
+
+        try:
+            channel_id = int(raw_channel_id)
+        except ValueError:
+            logger.warning(
+                "Invalid discord_channel_id '%s'. Discord bot will not connect.",
+                raw_channel_id,
+            )
+            return
+
+        if self._task and not self._task.done():
+            return
+
+        intents = discord.Intents.default()
+        product_manager = ProductManager(db=self.db)
+        self.client = UBStockClient(
+            intents=intents,
+            channel_id=channel_id,
+            product_manager=product_manager,
+        )
+        self._active_token = token
+        self._task = asyncio.create_task(self._run_client(token))
+
+    async def _run_client(self, token: str) -> None:
+        """Run the Discord client while catching errors so the web server stays up."""
+        assert self.client is not None
+        try:
+            await self.client.start(token)
+        except asyncio.CancelledError:
+            logger.info("Discord client task cancelled.")
+        except discord.LoginFailure:
+            logger.error(
+                "Failed to log in to Discord: invalid bot token. "
+                "Update credentials in the Web UI."
+            )
+        except discord.HTTPException as exc:
+            logger.error("Discord HTTP error during client execution: %s", exc)
+        except Exception as exc:
+            logger.error("Unexpected error in Discord client: %s", exc)
+        finally:
+            if self.client and not self.client.is_closed():
+                await self.client.close()
+
+    async def stop(self) -> None:
+        """Gracefully close the Discord client and cancel its background task."""
+        if self.client and not self.client.is_closed():
+            try:
+                await self.client.close()
+            except Exception as exc:
+                logger.warning("Error closing Discord client: %s", exc)
+        if self._task and not self._task.done():
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        self._task = None
+        self.client = None
+        self._active_token = ""
+
+    async def restart(self) -> None:
+        """Stop any running Discord client and start again with updated DB settings."""
+        await self.stop()
+        await self.start()

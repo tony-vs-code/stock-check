@@ -1,12 +1,9 @@
 """Product management module for UB Stock Bot."""
 
-import json
-import logging
-import os
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
-from config import DATA_DIR, PRODUCTS_FILE
+from database import Database, DuplicateProductError
 
 
 @dataclass
@@ -17,104 +14,80 @@ class Product:
     url: str
     selector: str
     in_stock: bool = False
+    id: Optional[int] = None
+    last_checked: Optional[str] = None
+    last_status_change: Optional[str] = None
+    last_error: Optional[str] = None
+    created_at: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> Dict[str, Any]:
         """Convert product to dictionary for JSON serialization."""
-        return {"name": self.name, "url": self.url, "selector": self.selector}
+        return {
+            "id": self.id,
+            "name": self.name,
+            "url": self.url,
+            "selector": self.selector,
+            "in_stock": self.in_stock,
+            "last_checked": self.last_checked,
+            "last_status_change": self.last_status_change,
+            "last_error": self.last_error,
+            "created_at": self.created_at,
+        }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, str]) -> "Product":
+    def from_dict(cls, data: Dict[str, Any]) -> "Product":
         """Create product from dictionary."""
-        return cls(name=data["name"], url=data["url"], selector=data["selector"])
+        return cls(
+            id=data.get("id"),
+            name=data["name"],
+            url=data["url"],
+            selector=data["selector"],
+            in_stock=bool(data.get("in_stock", False)),
+            last_checked=data.get("last_checked"),
+            last_status_change=data.get("last_status_change"),
+            last_error=data.get("last_error"),
+            created_at=data.get("created_at"),
+        )
 
 
 class ProductManager:
-    """Manages product persistence and operations."""
+    """Manages product persistence and operations backed by SQLite."""
 
-    def __init__(self):
-        self.products: Dict[str, Product] = {}
-        self.load_products()
-
-    def load_products(self) -> None:
-        """Load products from JSON file."""
-        os.makedirs(DATA_DIR, exist_ok=True)
-
-        if not os.path.exists(PRODUCTS_FILE):
-            logging.info(
-                f"No products file found. Creating empty file at {PRODUCTS_FILE}"
-            )
-            self.save_products()
-            return
-
-        try:
-            with open(PRODUCTS_FILE, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if not content:
-                    logging.info("Products file is empty. Creating empty list.")
-                    return
-
-                products_data = json.loads(content)
-                self.products = {
-                    item["name"]: Product.from_dict(item) for item in products_data
-                }
-                logging.info(f"Loaded {len(self.products)} products")
-        except (json.JSONDecodeError, KeyError) as e:
-            logging.error(f"Error loading products: {e}")
-            self.products = {}
-            self.save_products()
-
-    def save_products(self) -> None:
-        """Save products to JSON file."""
-        products_list = [product.to_dict() for product in self.products.values()]
-
-        try:
-            with open(PRODUCTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(products_list, f, indent=2)
-            logging.info(f"Saved {len(products_list)} products")
-        except Exception as e:
-            logging.error(f"Error saving products: {e}")
+    def __init__(self, db: Optional[Database] = None) -> None:
+        self.db = db or Database()
 
     def add_product(self, name: str, url: str, selector: str) -> bool:
         """Add a new product. Returns True if successful, False if already exists."""
-        if name in self.products:
+        try:
+            self.db.create_product(name=name, url=url, selector=selector)
+            return True
+        except DuplicateProductError:
             return False
-
-        self.products[name] = Product(name=name, url=url, selector=selector)
-        self.save_products()
-        return True
 
     def remove_product(self, name: str) -> bool:
-        """Remove a product. Returns True if successful, False if not found."""
-        if name not in self.products:
-            return False
-
-        del self.products[name]
-        self.save_products()
-        return True
+        """Remove a product by name. Returns True if successful, False if not found."""
+        return self.db.delete_product_by_name(name)
 
     def get_product(self, name: str) -> Optional[Product]:
         """Get a product by name."""
-        return self.products.get(name)
+        row = self.db.get_product_by_name(name)
+        return Product.from_dict(row) if row else None
 
     def get_all_products(self) -> Dict[str, Product]:
-        """Get all products."""
-        return self.products.copy()
+        """Get all products keyed by name."""
+        return {row["name"]: Product.from_dict(row) for row in self.db.list_products()}
 
     def is_empty(self) -> bool:
         """Check if no products are being monitored."""
-        return len(self.products) == 0
+        return len(self.db.list_products()) == 0
 
     def get_product_list_display(self) -> str:
-        """Get formatted list of products for display."""
-        if not self.products:
+        """Get formatted list of products for Discord display."""
+        products = self.get_all_products()
+        if not products:
             return "No products are currently being monitored."
 
         product_list = "\n".join(
-            [
-                f"• **{name}**: <{product.url}>"
-                for name, product in self.products.items()
-            ]
+            [f"• **{name}**: <{product.url}>" for name, product in products.items()]
         )
-        return (
-            f"**Currently Monitoring ({len(self.products)} products):**\n{product_list}"
-        )
+        return f"**Currently Monitoring ({len(products)} products):**\n{product_list}"
