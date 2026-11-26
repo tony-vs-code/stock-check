@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UBStock — UB Stock Monitor</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header & Brand Bar -->
+    <header class="top-header">
+      <div class="header-inner">
+        <div class="brand-cluster">
+          <div class="brand-logo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+          </div>
+          <div class="brand-text">
+            <div class="brand-title-row">
+              <h1 class="brand-title">UBStock</h1>
+              <span id="live-status-pill" class="status-pill status-pill--idle" role="status" aria-live="polite">
+                <span class="status-dot" aria-hidden="true"></span>
+                <span id="live-status-text">Idle</span>
+              </span>
+            </div>
+            <p class="brand-subtitle">Real-time product availability &amp; Discord alerting</p>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <span id="last-sync-label" class="last-sync-label" title="Auto-refreshes every 10 seconds">
+            Auto-refresh: 10s
+          </span>
+          <button id="btn-refresh" type="button" class="btn btn-ghost" title="Refresh dashboard data">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+            <span>Refresh</span>
+          </button>
+          <button id="btn-check-all" type="button" class="btn btn-secondary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+            </svg>
+            <span id="btn-check-all-label">Check All Now</span>
+          </button>
+          <button id="btn-add-product" type="button" class="btn btn-primary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>Add Product</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Stat Counters Strip -->
+      <section class="stats-grid" aria-label="Monitoring summary statistics">
+        <article class="stat-card">
+          <div class="stat-icon stat-icon--indigo" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
+            </svg>
+          </div>
+          <div class="stat-body">
+            <span class="stat-label">Total Products</span>
+            <strong id="stat-total-products" class="stat-value">0</strong>
+          </div>
+        </article>
+
+        <article class="stat-card stat-card--emerald">
+          <div class="stat-icon stat-icon--emerald" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+          </div>
+          <div class="stat-body">
+            <span class="stat-label">In Stock</span>
+            <strong id="stat-in-stock" class="stat-value stat-value--emerald">0</strong>
+          </div>
+        </article>
+
+        <article class="stat-card stat-card--rose">
+          <div class="stat-icon stat-icon--rose" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="15" y1="9" x2="9" y2="15" />
+              <line x1="9" y1="9" x2="15" y2="15" />
+            </svg>
+          </div>
+          <div class="stat-body">
+            <span class="stat-label">Out of Stock</span>
+            <strong id="stat-out-of-stock" class="stat-value stat-value--rose">0</strong>
+          </div>
+        </article>
+
+        <article class="stat-card">
+          <div class="stat-icon stat-icon--cyan" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+          </div>
+          <div class="stat-body">
+            <span class="stat-label">Discord Status</span>
+            <strong id="stat-discord-status" class="stat-value stat-value--sm">Unconfigured</strong>
+          </div>
+        </article>
+
+        <article class="stat-card">
+          <div class="stat-icon stat-icon--slate" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+          </div>
+          <div class="stat-body">
+            <span class="stat-label">Check Interval</span>
+            <strong id="stat-check-interval" class="stat-value stat-value--sm">15s</strong>
+            <span id="stat-last-check" class="stat-subtext">Never checked</span>
+          </div>
+        </article>
+      </section>
+
+      <!-- Primary Navigation Tabs -->
+      <nav class="nav-tabs" aria-label="Dashboard sections">
+        <button id="tab-products" type="button" class="nav-tab is-active" data-tab="products">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="3" width="7" height="7" rx="1" />
+            <rect x="14" y="14" width="7" height="7" rx="1" />
+            <rect x="3" y="14" width="7" height="7" rx="1" />
+          </svg>
+          <span>Products</span>
+          <span id="tab-products-badge" class="tab-badge">0</span>
+        </button>
+
+        <button id="tab-history" type="button" class="nav-tab" data-tab="history">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+          </svg>
+          <span>Activity Log</span>
+          <span id="tab-history-badge" class="tab-badge">0</span>
+        </button>
+
+        <button id="tab-settings" type="button" class="nav-tab" data-tab="settings">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+          <span>Settings</span>
+          <span id="settings-unconfigured-dot" class="tab-alert-dot is-hidden" title="Discord alerts not configured"></span>
+        </button>
+      </nav>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="main-content">
+      <!-- PRODUCTS VIEW -->
+      <section id="view-products" class="tab-view is-active" aria-labelledby="tab-products">
+        <div class="toolbar">
+          <div class="filter-pills" role="group" aria-label="Filter products by status">
+            <button type="button" class="filter-pill is-active" data-filter="all">
+              All <span id="filter-count-all" class="filter-count">0</span>
+            </button>
+            <button type="button" class="filter-pill" data-filter="in_stock">
+              In Stock <span id="filter-count-in-stock" class="filter-count">0</span>
+            </button>
+            <button type="button" class="filter-pill" data-filter="out_of_stock">
+              Out of Stock <span id="filter-count-out-of-stock" class="filter-count">0</span>
+            </button>
+            <button type="button" class="filter-pill" data-filter="error">
+              Error <span id="filter-count-error" class="filter-count">0</span>
+            </button>
+          </div>
+
+          <div class="search-box">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+            <input
+              id="product-search-input"
+              type="search"
+              class="search-input"
+              placeholder="Search products by name, URL, or selector..."
+              aria-label="Search products"
+            />
+          </div>
+        </div>
+
+        <!-- Product Cards Grid -->
+        <div id="products-grid" class="products-grid"></div>
+
+        <!-- Empty State: No products yet -->
+        <div id="products-empty-state" class="empty-state is-hidden">
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <line x1="12" y1="22.08" x2="12" y2="12" />
+              <line x1="12" y1="12" x2="20.73" y2="6.96" />
+              <line x1="12" y1="12" x2="3.27" y2="6.96" />
+            </svg>
+          </div>
+          <h2 class="empty-state-title">No products monitored yet</h2>
+          <p class="empty-state-desc">
+            Add a product URL and CSS selector to start tracking stock availability automatically.
+          </p>
+          <button id="btn-empty-add-product" type="button" class="btn btn-primary">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span>Add Your First Product</span>
+          </button>
+        </div>
+
+        <!-- Empty State: No filter/search matches -->
+        <div id="products-filter-empty" class="empty-state is-hidden">
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          </div>
+          <h2 class="empty-state-title">No matching products</h2>
+          <p class="empty-state-desc">
+            No products matched your current filter or search query.
+          </p>
+          <button id="btn-clear-filters" type="button" class="btn btn-secondary">
+            Clear Filters
+          </button>
+        </div>
+      </section>
+
+      <!-- ACTIVITY LOG / HISTORY VIEW -->
+      <section id="view-history" class="tab-view" aria-labelledby="tab-history">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Activity Log</h2>
+            <p class="section-subtitle">Chronological stock check events and Discord alert deliveries</p>
+          </div>
+          <button id="btn-clear-history" type="button" class="btn btn-danger-ghost">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+            <span>Clear History</span>
+          </button>
+        </div>
+
+        <div id="history-table-card" class="panel-card table-card">
+          <div class="table-responsive">
+            <table class="history-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Product</th>
+                  <th>Status</th>
+                  <th>Discord Alert</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="history-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="history-empty-state" class="empty-state is-hidden">
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+            </svg>
+          </div>
+          <h2 class="empty-state-title">No activity recorded yet</h2>
+          <p class="empty-state-desc">
+            Stock check results, status transitions, and Discord notifications will appear here.
+          </p>
+        </div>
+      </section>
+
+      <!-- SETTINGS VIEW -->
+      <section id="view-settings" class="tab-view" aria-labelledby="tab-settings">
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Monitor &amp; Discord Settings</h2>
+            <p class="section-subtitle">Configure polling cadence and Discord alert credentials</p>
+          </div>
+        </div>
+
+        <form id="settings-form" class="settings-layout">
+          <div class="panel-card settings-card">
+            <div class="card-heading">
+              <h3 class="card-title">Discord Integration</h3>
+              <span id="settings-token-badge" class="badge badge--neutral">Not Configured</span>
+            </div>
+
+            <div class="form-group">
+              <label for="setting-discord-token" class="form-label">Discord Bot Token</label>
+              <div class="input-with-action">
+                <input
+                  id="setting-discord-token"
+                  type="password"
+                  class="form-input"
+                  autocomplete="off"
+                  placeholder="Paste your Discord bot token"
+                />
+                <button id="btn-toggle-token-visibility" type="button" class="input-action-btn" title="Show or hide token" aria-label="Show or hide token">
+                  Show
+                </button>
+              </div>
+              <p id="setting-token-hint" class="form-hint">
+                Leave blank to keep the currently saved token unchanged.
+              </p>
+            </div>
+
+            <div class="form-group">
+              <label for="setting-discord-channel-id" class="form-label">Discord Channel ID</label>
+              <input
+                id="setting-discord-channel-id"
+                type="text"
+                class="form-input"
+                inputmode="numeric"
+                placeholder="e.g. 123456789012345678"
+              />
+              <p class="form-hint">
+                Target channel ID where stock alert messages will be posted.
+              </p>
+            </div>
+
+            <div class="test-discord-row">
+              <button id="btn-test-discord" type="button" class="btn btn-secondary">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+                <span id="btn-test-discord-label">Send Test Discord Notification</span>
+              </button>
+            </div>
+
+            <div id="test-discord-feedback" class="inline-feedback is-hidden" role="status" aria-live="polite"></div>
+          </div>
+
+          <div class="panel-card settings-card">
+            <div class="card-heading">
+              <h3 class="card-title">Polling &amp; Alerts</h3>
+            </div>
+
+            <div class="form-group">
+              <label for="setting-check-interval" class="form-label">Check Interval (seconds)</label>
+              <input
+                id="setting-check-interval"
+                type="number"
+                class="form-input"
+                min="1"
+                max="86400"
+                step="1"
+                required
+              />
+              <p class="form-hint">
+                Minimum 1 second, maximum 86,400 seconds (24 hours). Recommended: 15–60s.
+              </p>
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <label for="setting-notifications-enabled" class="form-label toggle-label">
+                  Notifications Enabled
+                </label>
+                <p class="form-hint">
+                  Send Discord messages automatically when a product transitions to In Stock.
+                </p>
+              </div>
+              <label class="switch">
+                <input id="setting-notifications-enabled" type="checkbox" checked />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="settings-actions">
+              <button id="btn-save-settings" type="submit" class="btn btn-primary">
+                <span id="btn-save-settings-label">Save Settings</span>
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <!-- ADD / EDIT PRODUCT MODAL -->
+  <div id="product-modal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="product-modal-title">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h2 id="product-modal-title" class="modal-title">Add Product</h2>
+        <button id="btn-close-product-modal" type="button" class="icon-btn" aria-label="Close modal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <form id="product-form" class="modal-body">
+        <div class="form-group">
+          <label for="product-name-input" class="form-label">Product Name</label>
+          <input
+            id="product-name-input"
+            type="text"
+            class="form-input"
+            maxlength="200"
+            placeholder="e.g. UniFi Cloud Gateway Ultra"
+            required
+          />
+        </div>
+
+        <div class="form-group">
+          <label for="product-url-input" class="form-label">Product URL</label>
+          <input
+            id="product-url-input"
+            type="url"
+            class="form-input"
+            maxlength="2048"
+            placeholder="https://store.ui.com/us/en/products/..."
+            required
+          />
+        </div>
+
+        <div class="form-group">
+          <div class="label-row">
+            <label for="product-selector-input" class="form-label">CSS Selector</label>
+            <button id="btn-test-selector" type="button" class="btn btn-xs btn-cyan">
+              <span id="btn-test-selector-label">Test Selector</span>
+            </button>
+          </div>
+          <input
+            id="product-selector-input"
+            type="text"
+            class="form-input form-input--mono"
+            maxlength="500"
+            placeholder="button[label='Add to Cart']"
+            required
+          />
+          <div class="preset-row" aria-label="CSS selector presets">
+            <span class="preset-label">Presets:</span>
+            <button type="button" class="preset-btn" data-selector="button[label='Add to Cart']">
+              button[label='Add to Cart']
+            </button>
+            <button type="button" class="preset-btn" data-selector=".in-stock">
+              .in-stock
+            </button>
+            <button type="button" class="preset-btn" data-selector=".add-to-cart">
+              .add-to-cart
+            </button>
+            <button type="button" class="preset-btn" data-selector="button.add-to-cart">
+              button.add-to-cart
+            </button>
+            <button type="button" class="preset-btn" data-selector="#add-to-cart">
+              #add-to-cart
+            </button>
+          </div>
+        </div>
+
+        <div id="selector-test-result" class="inline-feedback is-hidden" role="status" aria-live="polite"></div>
+        <div id="product-form-error" class="inline-feedback inline-feedback--error is-hidden" role="alert"></div>
+
+        <div class="modal-footer">
+          <button id="btn-cancel-product" type="button" class="btn btn-ghost">Cancel</button>
+          <button id="btn-save-product" type="submit" class="btn btn-primary">
+            <span id="btn-save-product-label">Save Product</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- CONFIRMATION MODAL -->
+  <div id="confirm-modal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+    <div class="modal-dialog modal-dialog--sm">
+      <div class="modal-header">
+        <h2 id="confirm-modal-title" class="modal-title">Confirm Action</h2>
+        <button id="btn-close-confirm-modal" type="button" class="icon-btn" aria-label="Close confirmation dialog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p id="confirm-modal-message" class="confirm-message">Are you sure you want to proceed?</p>
+        <div class="modal-footer">
+          <button id="btn-confirm-cancel" type="button" class="btn btn-ghost">Cancel</button>
+          <button id="btn-confirm-ok" type="button" class="btn btn-danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST CONTAINER -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
