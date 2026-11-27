@@ -77,6 +77,11 @@ class Database:
             finally:
                 conn.close()
 
+    _PRODUCT_COLUMNS = (
+        "id, name, url, selector, strategy, strategy_details, in_stock, "
+        "last_checked, last_status_change, last_error, created_at"
+    )
+
     def init_db(self) -> None:
         """Create schema tables, seed defaults, and migrate products.json if needed."""
         parent_dir = os.path.dirname(os.path.abspath(self.db_path))
@@ -85,46 +90,62 @@ class Database:
 
         with self._connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS products (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT UNIQUE NOT NULL,
-                    url TEXT NOT NULL,
-                    selector TEXT NOT NULL,
-                    in_stock INTEGER DEFAULT 0,
-                    last_checked TIMESTAMP,
-                    last_status_change TIMESTAMP,
-                    last_error TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    product_id INTEGER,
-                    product_name TEXT,
-                    status TEXT,
-                    notification_sent INTEGER DEFAULT 0,
-                    message TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-
+            self._init_tables(conn)
             self._seed_settings(conn)
             self._migrate_products_json(conn)
+
+    def _init_tables(self, conn: sqlite3.Connection) -> None:
+        """Create core tables and apply backwards-compatible column migrations."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                url TEXT NOT NULL,
+                selector TEXT NOT NULL DEFAULT '',
+                strategy TEXT DEFAULT 'auto',
+                strategy_details TEXT,
+                in_stock INTEGER DEFAULT 0,
+                last_checked TIMESTAMP,
+                last_status_change TIMESTAMP,
+                last_error TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+
+        # Backwards-compatible migration for existing databases
+        existing_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(products)").fetchall()
+        }
+        if "strategy" not in existing_columns:
+            conn.execute("ALTER TABLE products ADD COLUMN strategy TEXT DEFAULT 'auto'")
+        if "strategy_details" not in existing_columns:
+            conn.execute("ALTER TABLE products ADD COLUMN strategy_details TEXT")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER,
+                product_name TEXT,
+                status TEXT,
+                notification_sent INTEGER DEFAULT 0,
+                message TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
 
     def _seed_settings(self, conn: sqlite3.Connection) -> None:
         """Seed default settings and optional environment variables if absent."""
@@ -187,15 +208,16 @@ class Database:
             name = str(item.get("name", "")).strip()
             url = str(item.get("url", "")).strip()
             selector = str(item.get("selector", "")).strip()
-            if not (name and url and selector):
+            strategy = str(item.get("strategy", "auto") or "auto").strip()
+            if not (name and url):
                 continue
             conn.execute(
                 """
                 INSERT OR IGNORE INTO products
-                    (name, url, selector, in_stock, created_at)
-                VALUES (?, ?, ?, 0, ?)
+                    (name, url, selector, strategy, in_stock, created_at)
+                VALUES (?, ?, ?, ?, 0, ?)
                 """,
-                (name, url, selector, now),
+                (name, url, selector, strategy, now),
             )
             imported += 1
 
@@ -269,6 +291,8 @@ class Database:
             "name": row["name"],
             "url": row["url"],
             "selector": row["selector"],
+            "strategy": row["strategy"] or "auto",
+            "strategy_details": row["strategy_details"],
             "in_stock": bool(row["in_stock"]),
             "last_checked": row["last_checked"],
             "last_status_change": row["last_status_change"],
@@ -280,22 +304,24 @@ class Database:
         """List all monitored products ordered by ID."""
         with self._connection() as conn:
             rows = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 ORDER BY id ASC
                 """
             ).fetchall()
             return [self._row_to_product(row) for row in rows]
 
+    def get_products(self) -> list[dict[str, Any]]:
+        """Alias for list_products()."""
+        return self.list_products()
+
     def get_product(self, product_id: int) -> Optional[dict[str, Any]]:
         """Fetch a single product by ID."""
         with self._connection() as conn:
             row = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 WHERE id = ?
                 """,
@@ -307,9 +333,8 @@ class Database:
         """Fetch a single product by unique name."""
         with self._connection() as conn:
             row = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 WHERE name = ?
                 """,
@@ -317,17 +342,27 @@ class Database:
             ).fetchone()
             return self._row_to_product(row) if row is not None else None
 
-    def create_product(self, name: str, url: str, selector: str) -> dict[str, Any]:
+    def create_product(
+        self,
+        name: str,
+        url: str,
+        selector: str = "",
+        strategy: str = "auto",
+        strategy_details: Optional[str] = None,
+    ) -> dict[str, Any]:
         """Create a new product and return its full record."""
         now = utc_now_iso()
+        clean_strategy = (strategy or "auto").strip().lower()
         with self._connection() as conn:
             try:
                 cursor = conn.execute(
                     """
-                    INSERT INTO products (name, url, selector, in_stock, created_at)
-                    VALUES (?, ?, ?, 0, ?)
+                    INSERT INTO products
+                        (name, url, selector, strategy, strategy_details,
+                         in_stock, created_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?)
                     """,
-                    (name, url, selector, now),
+                    (name, url, selector, clean_strategy, strategy_details, now),
                 )
             except sqlite3.IntegrityError as exc:
                 raise DuplicateProductError(
@@ -336,9 +371,8 @@ class Database:
 
             product_id = cursor.lastrowid
             row = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 WHERE id = ?
                 """,
@@ -346,19 +380,37 @@ class Database:
             ).fetchone()
             return self._row_to_product(row)
 
+    def add_product(
+        self,
+        name: str,
+        url: str,
+        selector: str = "",
+        strategy: str = "auto",
+        strategy_details: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Alias for create_product()."""
+        return self.create_product(
+            name=name,
+            url=url,
+            selector=selector,
+            strategy=strategy,
+            strategy_details=strategy_details,
+        )
+
     def update_product(
         self,
         product_id: int,
         name: Optional[str] = None,
         url: Optional[str] = None,
         selector: Optional[str] = None,
+        strategy: Optional[str] = None,
+        strategy_details: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         """Update an existing product's fields and return the updated record."""
         with self._connection() as conn:
             existing = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 WHERE id = ?
                 """,
@@ -370,15 +422,33 @@ class Database:
             new_name = name if name is not None else existing["name"]
             new_url = url if url is not None else existing["url"]
             new_selector = selector if selector is not None else existing["selector"]
+            new_strategy = (
+                strategy.strip().lower()
+                if strategy is not None
+                else (existing["strategy"] or "auto")
+            )
+            new_strategy_details = (
+                strategy_details
+                if strategy_details is not None
+                else existing["strategy_details"]
+            )
 
             try:
                 conn.execute(
                     """
                     UPDATE products
-                    SET name = ?, url = ?, selector = ?
+                    SET name = ?, url = ?, selector = ?,
+                        strategy = ?, strategy_details = ?
                     WHERE id = ?
                     """,
-                    (new_name, new_url, new_selector, product_id),
+                    (
+                        new_name,
+                        new_url,
+                        new_selector,
+                        new_strategy,
+                        new_strategy_details,
+                        product_id,
+                    ),
                 )
             except sqlite3.IntegrityError as exc:
                 raise DuplicateProductError(
@@ -386,9 +456,8 @@ class Database:
                 ) from exc
 
             updated = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 WHERE id = ?
                 """,
@@ -415,12 +484,17 @@ class Database:
         error: Optional[str],
         checked_at: Optional[str] = None,
         status_changed: bool = False,
+        strategy_details: Optional[str] = None,
     ) -> Optional[dict[str, Any]]:
         """Update stock check metadata for a product after a check attempt."""
         timestamp = checked_at or utc_now_iso()
         with self._connection() as conn:
             existing = conn.execute(
-                "SELECT id, in_stock, last_status_change FROM products WHERE id = ?",
+                """
+                SELECT id, in_stock, last_status_change, strategy_details
+                FROM products
+                WHERE id = ?
+                """,
                 (product_id,),
             ).fetchone()
             if existing is None:
@@ -428,6 +502,11 @@ class Database:
 
             stock_val = existing["in_stock"] if in_stock is None else int(in_stock)
             change_ts = timestamp if status_changed else existing["last_status_change"]
+            details_val = (
+                strategy_details
+                if strategy_details is not None
+                else existing["strategy_details"]
+            )
 
             conn.execute(
                 """
@@ -435,15 +514,15 @@ class Database:
                 SET in_stock = ?,
                     last_checked = ?,
                     last_status_change = ?,
-                    last_error = ?
+                    last_error = ?,
+                    strategy_details = ?
                 WHERE id = ?
                 """,
-                (stock_val, timestamp, change_ts, error, product_id),
+                (stock_val, timestamp, change_ts, error, details_val, product_id),
             )
             row = conn.execute(
-                """
-                SELECT id, name, url, selector, in_stock, last_checked,
-                       last_status_change, last_error, created_at
+                f"""
+                SELECT {self._PRODUCT_COLUMNS}
                 FROM products
                 WHERE id = ?
                 """,

@@ -423,7 +423,13 @@ def test_test_selector_endpoint(client: TestClient) -> None:
             json={"url": "https://example.com/item", "selector": "#stock"},
         )
     assert res.status_code == 200
-    assert res.json() == {"in_stock": True, "found_selector": True, "error": None}
+    body = res.json()
+    assert body["in_stock"] is True
+    assert body["found_selector"] is True
+    assert body["strategy_used"] == "text_heuristic"
+    assert body["detected_by"] == "in_stock_text"
+    assert body["error"] is None
+    assert body["details"] is not None
     assert client.get("/api/products").json() == []
 
     # Invalid CSS selector returns graceful error
@@ -512,17 +518,25 @@ def test_real_static_assets_served(temp_db: Database) -> None:
         assert "UBStock" in index_res.text
         assert "/styles.css" in index_res.text
         assert "/app.js" in index_res.text
+        assert 'id="product-strategy-select"' in index_res.text
+        assert 'id="btn-toggle-optional-selector"' in index_res.text
+        assert 'id="optional-selector-toggle-row"' in index_res.text
+        assert 'id="product-selector-group"' in index_res.text
 
         css_res = real_client.get("/styles.css")
         assert css_res.status_code == 200
         assert "text/css" in css_res.headers["content-type"]
         assert "--bg-base" in css_res.text
+        assert ".strategy-badge" in css_res.text
 
         js_res = real_client.get("/app.js")
         assert js_res.status_code == 200
         assert "javascript" in js_res.headers["content-type"]
         assert "/api/products" in js_res.text
+        assert "/api/products/test-selector" in js_res.text
         assert "/api/settings" in js_res.text
+        assert "product-strategy-select" in js_res.text
+        assert "btn-toggle-optional-selector" in js_res.text
 
 
 def test_zero_env_startup_with_background_tasks(
@@ -614,7 +628,7 @@ def test_empty_states_and_invalid_product_inputs(client: TestClient) -> None:
         == 422
     )
 
-    # Blank selector defaults to DEFAULT_SELECTOR
+    # Blank selector defaults to '' for auto, and DEFAULT_SELECTOR for css_selector
     default_sel = client.post(
         "/api/products",
         json={
@@ -624,7 +638,33 @@ def test_empty_states_and_invalid_product_inputs(client: TestClient) -> None:
         },
     )
     assert default_sel.status_code == 201
-    assert default_sel.json()["selector"] == "button[label='Add to Cart']"
+    assert default_sel.json()["strategy"] == "auto"
+    assert default_sel.json()["selector"] == ""
+
+    css_default_sel = client.post(
+        "/api/products",
+        json={
+            "name": "Product CSS Default",
+            "url": "https://example.com/css",
+            "strategy": "css_selector",
+        },
+    )
+    assert css_default_sel.status_code == 201
+    assert css_default_sel.json()["strategy"] == "css_selector"
+    assert css_default_sel.json()["selector"] == "button[label='Add to Cart']"
+
+    # Unsupported strategy rejected with 422
+    assert (
+        client.post(
+            "/api/products",
+            json={
+                "name": "Bad Strategy",
+                "url": "https://example.com/bad-strategy",
+                "strategy": "magic_ai",
+            },
+        ).status_code
+        == 422
+    )
 
     # Duplicate name on PUT returns 409 Conflict
     second = client.post(
@@ -656,7 +696,12 @@ def test_test_selector_edge_cases(client: TestClient) -> None:
             json={"url": "https://example.com/item", "selector": "#buy-now"},
         )
     assert miss.status_code == 200
-    assert miss.json() == {"in_stock": False, "found_selector": False, "error": None}
+    miss_json = miss.json()
+    assert miss_json["in_stock"] is False
+    assert miss_json["found_selector"] is False
+    assert miss_json["strategy_used"] == "text_heuristic"
+    assert miss_json["detected_by"] == "sold_out_text"
+    assert miss_json["error"] is None
 
     with patch(
         "stock_checker.fetch_product_page",
@@ -795,3 +840,566 @@ def test_dynamic_settings_persistence_and_notification_toggle(
     assert reloaded_db.get_setting("notifications_enabled") == "false"
     assert reloaded_db.get_setting("discord_token") == "real-secret-token-9876"
     assert len(reloaded_db.list_products()) == 1
+
+
+# ----------------------------------------------------------------------
+# Multi-Strategy Stock Detection & DB Migration Tests
+# ----------------------------------------------------------------------
+
+
+def test_sqlite_migration_adds_strategy_columns(tmp_path: Path) -> None:
+    """Verify existing DBs without strategy columns are migrated cleanly."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            url TEXT NOT NULL,
+            selector TEXT NOT NULL,
+            in_stock INTEGER DEFAULT 0,
+            last_checked TIMESTAMP,
+            last_status_change TIMESTAMP,
+            last_error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO products (name, url, selector, in_stock)
+        VALUES ('Legacy Item', 'https://example.com/legacy', '.buy', 1)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    migrated = Database(db_path=str(db_path), products_file=str(tmp_path / "none.json"))
+    with sqlite3.connect(str(db_path)) as verify_conn:
+        cols = {
+            row[1]
+            for row in verify_conn.execute("PRAGMA table_info(products)").fetchall()
+        }
+    assert "strategy" in cols
+    assert "strategy_details" in cols
+
+    items = migrated.list_products()
+    assert len(items) == 1
+    assert items[0]["name"] == "Legacy Item"
+    assert items[0]["strategy"] == "auto"
+    assert items[0]["strategy_details"] is None
+
+
+def test_product_manager_strategy_fields(temp_db: Database) -> None:
+    """Verify ProductManager add/get/update/list handle strategy fields."""
+    pm = ProductManager(db=temp_db)
+    assert pm.add_product(
+        name="Widget",
+        url="https://shop.example.com/products/widget",
+        selector="",
+        strategy="shopify",
+        strategy_details="1 of 1 variant(s) available",
+    )
+    prod = pm.get_product("Widget")
+    assert prod is not None
+    assert prod.strategy == "shopify"
+    assert prod.strategy_details == "1 of 1 variant(s) available"
+
+    all_prods = pm.get_products()
+    assert len(all_prods) == 1
+    assert all_prods[0].id == prod.id
+
+    assert prod.id is not None
+    updated = pm.update_product(
+        prod.id,
+        strategy="json_ld",
+        strategy_details="Offer availability: InStock",
+    )
+    assert updated is not None
+    assert updated.strategy == "json_ld"
+    assert updated.strategy_details == "Offer availability: InStock"
+
+
+@pytest.mark.asyncio
+async def test_strategy_shopify_explicit_and_auto() -> None:
+    """Verify Shopify JSON detection in explicit and auto modes."""
+    in_stock_payload = {
+        "product": {
+            "variants": [
+                {"id": 1, "available": False},
+                {"id": 2, "available": True},
+            ]
+        }
+    }
+    out_stock_payload = {
+        "product": {
+            "variants": [
+                {"id": 1, "available": False},
+            ]
+        }
+    }
+
+    with patch(
+        "stock_checker.fetch_shopify_json",
+        new=AsyncMock(return_value=(in_stock_payload, None)),
+    ):
+        res_in = await StockChecker.detect_stock(
+            url="https://coolshop.com/products/widget",
+            strategy="shopify",
+        )
+    assert res_in["in_stock"] is True
+    assert res_in["strategy_used"] == "shopify"
+    assert res_in["detected_by"] == "shopify_json"
+    assert "1 of 2" in (res_in["details"] or "")
+    assert res_in["error"] is None
+
+    with patch(
+        "stock_checker.fetch_shopify_json",
+        new=AsyncMock(return_value=(out_stock_payload, None)),
+    ):
+        res_out = await StockChecker.detect_stock(
+            url="https://coolshop.com/products/widget",
+            strategy="shopify",
+        )
+    assert res_out["in_stock"] is False
+    assert res_out["strategy_used"] == "shopify"
+    assert "0 of 1" in (res_out["details"] or "")
+
+    # Auto mode triggers Shopify JSON when HTML contains Shopify storefront markers
+    shopify_html = (
+        '<html><head><script src="https://cdn.shopify.com/s/app.js"></script>'
+        "</head><body><div>Sold Out</div></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=shopify_html),
+        ),
+        patch(
+            "stock_checker.fetch_shopify_json",
+            new=AsyncMock(return_value=(in_stock_payload, None)),
+        ),
+    ):
+        res_auto = await StockChecker.detect_stock(
+            url="https://coolshop.com/products/widget",
+            strategy="auto",
+        )
+    assert res_auto["in_stock"] is True
+    assert res_auto["strategy_used"] == "shopify"
+    assert res_auto["detected_by"] == "shopify_json"
+
+
+@pytest.mark.asyncio
+async def test_strategy_json_ld_variants_and_auto() -> None:
+    """Verify Schema.org JSON-LD detection for InStock, PreOrder, and OutOfStock."""
+    html_preorder = """
+    <html><head>
+      <script type="application/ld+json">{bad json</script>
+      <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@graph": [
+            {"@type": "WebPage", "name": "Store"},
+            {
+              "@type": "Product",
+              "name": "Router",
+              "offers": [
+                {"@type": "Offer", "availability": "https://schema.org/OutOfStock"},
+                {"@type": "Offer", "availability": "https://schema.org/PreOrder"}
+              ]
+            }
+          ]
+        }
+      </script>
+    </head><body><p>Sold Out</p></body></html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_preorder),
+    ):
+        res_auto = await StockChecker.detect_stock(
+            url="https://example.com/router", strategy="auto"
+        )
+    assert res_auto["in_stock"] is True
+    assert res_auto["strategy_used"] == "json_ld"
+    assert res_auto["detected_by"] == "json_ld_offer"
+
+    html_sold_out = """
+    <html><head>
+      <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "offers": {"@type": "Offer", "availability": "https://schema.org/SoldOut"}
+        }
+      </script>
+    </head></html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_sold_out),
+    ):
+        res_explicit = await StockChecker.detect_stock(
+            url="https://example.com/router", strategy="json_ld"
+        )
+    assert res_explicit["in_stock"] is False
+    assert res_explicit["strategy_used"] == "json_ld"
+    assert "SoldOut" in (res_explicit["details"] or "")
+
+
+@pytest.mark.asyncio
+async def test_strategy_meta_tags_opengraph() -> None:
+    """Verify OpenGraph and product meta availability detection in auto mode."""
+    html_og_in = (
+        '<html><head><meta property="og:availability" content="instock" /></head>'
+        "<body></body></html>"
+    )
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_og_in),
+    ):
+        res_in = await StockChecker.detect_stock(
+            url="https://example.com/item", strategy="auto"
+        )
+    assert res_in["in_stock"] is True
+    assert res_in["strategy_used"] == "meta_tags"
+    assert res_in["detected_by"] == "og:availability"
+
+    html_prod_out = (
+        '<html><head><meta property="product:availability" content="out of stock" />'
+        "</head><body></body></html>"
+    )
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_prod_out),
+    ):
+        res_out = await StockChecker.detect_stock(
+            url="https://example.com/item", strategy="auto"
+        )
+    assert res_out["in_stock"] is False
+    assert res_out["strategy_used"] == "meta_tags"
+    assert res_out["detected_by"] == "product:availability"
+
+
+@pytest.mark.asyncio
+async def test_strategy_text_heuristic_and_disabled_buttons() -> None:
+    """Verify text heuristics, button disabled/aria-disabled, and script ignoring."""
+    html_enabled = (
+        "<html><body><button type='button'>Add to Cart</button></body></html>"
+    )
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_enabled),
+    ):
+        res_ok = await StockChecker.detect_stock(
+            url="https://example.com/item", strategy="text_heuristic"
+        )
+    assert res_ok["in_stock"] is True
+    assert res_ok["strategy_used"] == "text_heuristic"
+    assert res_ok["detected_by"] == "button_enabled"
+
+    html_disabled = "<html><body><button disabled>Add to Cart</button></body></html>"
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_disabled),
+    ):
+        res_dis = await StockChecker.detect_stock(
+            url="https://example.com/item", strategy="text_heuristic"
+        )
+    assert res_dis["in_stock"] is False
+    assert res_dis["detected_by"] == "button_disabled"
+
+    html_aria_disabled = (
+        '<html><body><a role="button" aria-disabled="true">Buy Now</a></body></html>'
+    )
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_aria_disabled),
+    ):
+        res_aria = await StockChecker.detect_stock(
+            url="https://example.com/item", strategy="text_heuristic"
+        )
+    assert res_aria["in_stock"] is False
+    assert res_aria["detected_by"] == "button_disabled"
+
+    # Script tag text like "sold out" must be ignored
+    html_script_noise = (
+        "<html><body><script>var msg = 'sold out';</script>"
+        "<p>Currently Unavailable</p></body></html>"
+    )
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_script_noise),
+    ):
+        res_text = await StockChecker.detect_stock(
+            url="https://example.com/item", strategy="text_heuristic"
+        )
+    assert res_text["in_stock"] is False
+    assert res_text["detected_by"] == "sold_out_text"
+
+
+@pytest.mark.asyncio
+async def test_strategy_css_selector_with_disabled_inspection() -> None:
+    """Verify css_selector strategy detects enabled vs disabled matched elements."""
+    html_enabled = "<html><body><button label='Add to Cart'>Buy</button></body></html>"
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_enabled),
+    ):
+        res_ok = await StockChecker.detect_stock(
+            url="https://example.com/item",
+            selector="button[label='Add to Cart']",
+            strategy="css_selector",
+        )
+    assert res_ok["in_stock"] is True
+    assert res_ok["found_selector"] is True
+    assert res_ok["strategy_used"] == "css_selector"
+    assert res_ok["detected_by"] == "css_selector"
+
+    html_disabled = (
+        "<html><body><button label='Add to Cart' disabled>Buy</button></body></html>"
+    )
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_disabled),
+    ):
+        res_dis = await StockChecker.detect_stock(
+            url="https://example.com/item",
+            selector="button[label='Add to Cart']",
+            strategy="css_selector",
+        )
+    assert res_dis["in_stock"] is False
+    assert res_dis["found_selector"] is True
+    assert res_dis["strategy_used"] == "css_selector"
+    assert res_dis["detected_by"] == "css_selector_disabled"
+
+
+@pytest.mark.asyncio
+async def test_auto_cascade_falls_back_to_css_selector() -> None:
+    """Verify auto strategy falls through Steps 1-4 to CSS selector fallback."""
+    neutral_html = "<html><body><span class='custom-ready'>Go</span></body></html>"
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=neutral_html),
+    ):
+        res = await StockChecker.detect_stock(
+            url="https://example.com/item",
+            selector=".custom-ready",
+            strategy="auto",
+        )
+    assert res["in_stock"] is True
+    assert res["found_selector"] is True
+    assert res["strategy_used"] == "css_selector"
+    assert res["detected_by"] == "css_selector"
+
+
+def test_api_multi_strategy_create_update_test_and_check(client: TestClient) -> None:
+    """Verify API endpoints persist strategy, run test-selector, and check-all."""
+    # Create JSON-LD product without a CSS selector
+    p1 = client.post(
+        "/api/products",
+        json={
+            "name": "LD Product",
+            "url": "https://example.com/ld-product",
+            "strategy": "json_ld",
+        },
+    )
+    assert p1.status_code == 201
+    p1_data = p1.json()
+    assert p1_data["strategy"] == "json_ld"
+    assert p1_data["selector"] == ""
+    assert p1_data["strategy_details"] is None
+
+    # Create Shopify product
+    p2 = client.post(
+        "/api/products",
+        json={
+            "name": "Shopify Product",
+            "url": "https://mystore.myshopify.com/products/gadget",
+            "strategy": "shopify",
+        },
+    )
+    assert p2.status_code == 201
+    assert p2.json()["strategy"] == "shopify"
+
+    # Update LD Product to css_selector without selector -> auto-populates default
+    upd = client.put(
+        f"/api/products/{p1_data['id']}",
+        json={"strategy": "css_selector"},
+    )
+    assert upd.status_code == 200
+    assert upd.json()["strategy"] == "css_selector"
+    assert upd.json()["selector"] == "button[label='Add to Cart']"
+
+    # Switch back to json_ld and test check + check-all
+    client.put(
+        f"/api/products/{p1_data['id']}",
+        json={"strategy": "json_ld", "selector": ""},
+    )
+
+    ld_html = (
+        '<script type="application/ld+json">'
+        '{"@type":"Product","offers":{"availability":"https://schema.org/InStock"}}'
+        "</script>"
+    )
+    shopify_payload = {"product": {"variants": [{"id": 1, "available": False}]}}
+
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=ld_html),
+        ),
+        patch(
+            "stock_checker.fetch_shopify_json",
+            new=AsyncMock(return_value=(shopify_payload, None)),
+        ),
+    ):
+        chk_all = client.post("/api/check-all")
+
+    assert chk_all.status_code == 200
+    summary = chk_all.json()
+    assert summary["checked"] == 2
+    assert summary["in_stock_count"] == 1
+    assert summary["out_of_stock_count"] == 1
+
+    by_name = {p["name"]: p for p in summary["products"]}
+    assert by_name["LD Product"]["in_stock"] is True
+    assert "json_ld" in (by_name["LD Product"]["strategy_details"] or "")
+    assert by_name["Shopify Product"]["in_stock"] is False
+    assert "shopify" in (by_name["Shopify Product"]["strategy_details"] or "")
+
+    # Test /api/products/test-selector with explicit strategy
+    with patch(
+        "stock_checker.fetch_shopify_json",
+        new=AsyncMock(
+            return_value=({"product": {"variants": [{"available": True}]}}, None)
+        ),
+    ):
+        test_res = client.post(
+            "/api/products/test-selector",
+            json={
+                "url": "https://mystore.myshopify.com/products/gadget",
+                "strategy": "shopify",
+            },
+        )
+    assert test_res.status_code == 200
+    assert test_res.json()["in_stock"] is True
+    assert test_res.json()["strategy_used"] == "shopify"
+    assert test_res.json()["detected_by"] == "shopify_json"
+
+
+def test_api_omitted_selector_non_css_strategies_and_strategy_updates(
+    client: TestClient,
+) -> None:
+    """Verify omitted selectors for non-CSS strategies and PUT strategy transitions."""
+    # 1. All non-CSS strategies succeed on POST /api/products when selector is omitted
+    for strat in ("auto", "json_ld", "shopify", "text_heuristic"):
+        res = client.post(
+            "/api/products",
+            json={
+                "name": f"No Selector {strat}",
+                "url": f"https://example.com/{strat}",
+                "strategy": strat,
+            },
+        )
+        assert res.status_code == 201
+        body = res.json()
+        assert body["strategy"] == strat
+        assert body["selector"] == ""
+
+    # Explicit null selector is also normalized to "" for non-CSS strategies
+    null_sel = client.post(
+        "/api/products",
+        json={
+            "name": "Null Selector Heuristic",
+            "url": "https://example.com/null-sel",
+            "strategy": "text_heuristic",
+            "selector": None,
+        },
+    )
+    assert null_sel.status_code == 201
+    assert null_sel.json()["selector"] == ""
+    prod_id = null_sel.json()["id"]
+
+    # 2. /api/products/test-selector works with omitted selector across non-CSS modes
+    html_button = "<button>Add to Cart</button>"
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_button),
+    ):
+        for strat in ("auto", "text_heuristic"):
+            test_res = client.post(
+                "/api/products/test-selector",
+                json={"url": "https://example.com/item", "strategy": strat},
+            )
+            assert test_res.status_code == 200
+            assert test_res.json()["in_stock"] is True
+            assert test_res.json()["strategy_used"] == "text_heuristic"
+            assert test_res.json()["error"] is None
+
+        # css_selector with omitted selector falls back to DEFAULT_SELECTOR
+        css_fallback = client.post(
+            "/api/products/test-selector",
+            json={"url": "https://example.com/item", "strategy": "css_selector"},
+        )
+        assert css_fallback.status_code == 200
+        assert css_fallback.json()["strategy_used"] == "css_selector"
+        assert css_fallback.json()["in_stock"] is False
+        assert css_fallback.json()["found_selector"] is False
+
+    # Unsupported strategy in test-selector returns structured error
+    bad_strat_test = client.post(
+        "/api/products/test-selector",
+        json={"url": "https://example.com/item", "strategy": "unknown_mode"},
+    )
+    assert bad_strat_test.status_code == 200
+    assert bad_strat_test.json()["in_stock"] is False
+    assert "Unsupported strategy" in (bad_strat_test.json()["error"] or "")
+
+    # 3. Updating strategy on an existing product preserves/populates selector properly
+    # Non-CSS -> non-CSS with omitted selector keeps selector=""
+    upd1 = client.put(f"/api/products/{prod_id}", json={"strategy": "json_ld"})
+    assert upd1.status_code == 200
+    assert upd1.json()["strategy"] == "json_ld"
+    assert upd1.json()["selector"] == ""
+
+    # Non-CSS -> css_selector with omitted selector auto-populates DEFAULT_SELECTOR
+    upd2 = client.put(f"/api/products/{prod_id}", json={"strategy": "css_selector"})
+    assert upd2.status_code == 200
+    assert upd2.json()["strategy"] == "css_selector"
+    assert upd2.json()["selector"] == "button[label='Add to Cart']"
+
+    # Custom css_selector -> auto preserves custom selector as fallback
+    upd3 = client.put(
+        f"/api/products/{prod_id}",
+        json={"selector": ".custom-buy", "strategy": "css_selector"},
+    )
+    assert upd3.status_code == 200
+    assert upd3.json()["selector"] == ".custom-buy"
+
+    upd4 = client.put(f"/api/products/{prod_id}", json={"strategy": "auto"})
+    assert upd4.status_code == 200
+    assert upd4.json()["strategy"] == "auto"
+    assert upd4.json()["selector"] == ".custom-buy"
+
+    # Invalid strategy update returns 422
+    bad_upd = client.put(f"/api/products/{prod_id}", json={"strategy": "invalid_strat"})
+    assert bad_upd.status_code == 422
+
+    # Updated strategy is persisted and used during /api/products/{id}/check
+    upd5 = client.put(
+        f"/api/products/{prod_id}",
+        json={"strategy": "text_heuristic", "selector": ""},
+    )
+    assert upd5.status_code == 200
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value="<button>Buy Now</button>"),
+    ):
+        chk = client.post(f"/api/products/{prod_id}/check")
+    assert chk.status_code == 200
+    assert chk.json()["in_stock"] is True
+    assert chk.json()["strategy"] == "text_heuristic"
+    assert "text_heuristic" in (chk.json()["strategy_details"] or "")

@@ -1,16 +1,20 @@
-"""Stock checking, Discord REST notifications, and background monitor loop."""
+"""Stock checking, multi-strategy detection, Discord alerts, and monitor loop."""
 
 import asyncio
+import json
 import logging
+import re
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Tuple, Union
+from urllib.parse import urlparse, urlunparse
 
 import aiohttp
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
+from config import DEFAULT_SELECTOR
 from database import Database, utc_now_iso
 from product_manager import Product
-from utils import fetch_product_page
+from utils import DEFAULT_HEADERS, fetch_product_page
 
 if TYPE_CHECKING:
     import discord
@@ -18,6 +22,186 @@ if TYPE_CHECKING:
     from discord_client import DiscordManager
 
 logger = logging.getLogger(__name__)
+
+VALID_STRATEGIES: tuple[str, ...] = (
+    "auto",
+    "json_ld",
+    "shopify",
+    "text_heuristic",
+    "css_selector",
+)
+
+_SHOPIFY_HTML_MARKERS: tuple[str, ...] = (
+    "cdn.shopify.com",
+    "shopify.shop",
+    "shopify-section",
+    "shopify-features",
+    "window.shopify",
+    'content="shopify"',
+    "content='shopify'",
+)
+
+_JSON_LD_IN_STOCK = {
+    "instock",
+    "preorder",
+    "presale",
+    "limitedavailability",
+    "onlineonly",
+}
+_JSON_LD_OUT_OF_STOCK = {
+    "outofstock",
+    "soldout",
+    "discontinued",
+    "backorder",
+    "instoreonly",
+}
+
+_META_IN_STOCK = {
+    "instock",
+    "available",
+    "preorder",
+    "availablefororder",
+    "yes",
+    "true",
+}
+_META_OUT_OF_STOCK = {
+    "outofstock",
+    "oos",
+    "soldout",
+    "unavailable",
+    "discontinued",
+    "backorder",
+    "no",
+    "false",
+}
+
+_NEGATIVE_PHRASES: tuple[str, ...] = (
+    "sold out",
+    "out of stock",
+    "currently unavailable",
+    "backorder",
+    "not in stock",
+)
+_POSITIVE_BUTTON_PHRASES: tuple[str, ...] = (
+    "add to cart",
+    "add to bag",
+    "add to basket",
+    "buy now",
+    "pre-order",
+    "preorder",
+)
+_POSITIVE_TEXT_PHRASES: tuple[str, ...] = (
+    "add to cart",
+    "buy now",
+    "in stock",
+)
+_IGNORED_TEXT_PARENTS = {"script", "style", "noscript", "template"}
+
+
+def _build_shopify_json_url(url: str) -> str:
+    """Convert a product page URL into its Shopify .json endpoint URL."""
+    parsed = urlparse(url.strip())
+    clean_path = parsed.path.rstrip("/")
+    if not clean_path.endswith(".json"):
+        clean_path = f"{clean_path}.json" if clean_path else "/products.json"
+    return urlunparse((parsed.scheme, parsed.netloc, clean_path, "", "", ""))
+
+
+async def fetch_shopify_json(
+    url: str,
+) -> Tuple[Optional[dict[str, Any]], Optional[str]]:
+    """Fetch JSON from a Shopify product .json endpoint."""
+    json_url = _build_shopify_json_url(url)
+    timeout = aiohttp.ClientTimeout(total=10)
+    headers = {**DEFAULT_HEADERS, "Accept": "application/json"}
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(json_url) as response:
+                if response.status != 200:
+                    return None, (
+                        f"Shopify JSON endpoint returned HTTP {response.status}"
+                    )
+                payload = await response.json(content_type=None)
+                if not isinstance(payload, dict):
+                    return None, "Shopify JSON endpoint returned non-object payload."
+                return payload, None
+    except Exception as exc:
+        return None, f"Failed to fetch Shopify JSON: {exc}"
+
+
+def _make_result(
+    *,
+    in_stock: bool,
+    found_selector: bool,
+    strategy_used: str,
+    detected_by: str,
+    error: Optional[str] = None,
+    details: Optional[str] = None,
+) -> dict[str, Any]:
+    """Build a uniform structured detection result dictionary."""
+    return {
+        "in_stock": in_stock,
+        "found_selector": found_selector,
+        "strategy_used": strategy_used,
+        "detected_by": detected_by,
+        "error": error,
+        "details": details,
+    }
+
+
+def _normalize_token(value: str) -> str:
+    """Normalize Schema.org / meta availability strings for comparison."""
+    tail = value.strip().rsplit("/", 1)[-1]
+    return re.sub(r"[\s_\-]+", "", tail.lower())
+
+
+def _is_element_disabled(element: Tag) -> bool:
+    """Return True if an HTML element is disabled via attribute or ARIA state."""
+    if element.has_attr("disabled"):
+        return True
+    if str(element.get("aria-disabled", "")).strip().lower() == "true":
+        return True
+    if str(element.get("data-disabled", "")).strip().lower() == "true":
+        return True
+    return False
+
+
+def _has_ignored_ancestor(tag: Optional[Tag]) -> bool:
+    """Return True if tag or any parent is script/style/noscript/template."""
+    current = tag
+    while current is not None:
+        if getattr(current, "name", None) in _IGNORED_TEXT_PARENTS:
+            return True
+        current = current.parent
+    return False
+
+
+def _collect_json_ld_availabilities(node: Any, out: list[str]) -> None:
+    """Recursively collect Schema.org availability values from JSON-LD objects."""
+    if isinstance(node, list):
+        for item in node:
+            _collect_json_ld_availabilities(item, out)
+        return
+    if not isinstance(node, dict):
+        return
+
+    raw_type = node.get("@type")
+    if isinstance(raw_type, list):
+        types = {str(t).lower() for t in raw_type}
+    elif isinstance(raw_type, str):
+        types = {raw_type.lower()}
+    else:
+        types = set()
+
+    is_commerce_node = bool(
+        types & {"product", "offer", "aggregateoffer", "productmodel"}
+    )
+    if (is_commerce_node or not types) and isinstance(node.get("availability"), str):
+        out.append(node["availability"])
+
+    for key in ("offers", "@graph", "mainEntity", "itemListElement", "item"):
+        if key in node:
+            _collect_json_ld_availabilities(node[key], out)
 
 
 async def send_discord_rest_message(
@@ -53,13 +237,14 @@ async def send_discord_rest_message(
 
 
 class StockChecker:
-    """Handles HTML stock parsing, single-product checks, and selector tests."""
+    """Multi-strategy stock detection engine and selector utilities."""
 
     @staticmethod
     def parse_stock_status(content: str, selector: str) -> bool:
-        """Parse HTML content to check for stock availability."""
+        """Parse HTML content to check CSS selector presence and enabled state."""
         soup = BeautifulSoup(content, "html.parser")
-        return bool(soup.select_one(selector))
+        matches = soup.select(selector)
+        return any(not _is_element_disabled(el) for el in matches)
 
     @staticmethod
     def validate_selector(selector: str) -> Optional[str]:
@@ -73,46 +258,478 @@ class StockChecker:
             return f"Invalid CSS selector '{selector}': {exc}"
 
     @staticmethod
+    def validate_strategy(strategy: Optional[str]) -> Optional[str]:
+        """Validate a detection strategy name. Returns error message or None."""
+        cleaned = (strategy or "auto").strip().lower()
+        if cleaned not in VALID_STRATEGIES:
+            allowed = ", ".join(VALID_STRATEGIES)
+            return f"Unsupported strategy '{strategy}'. Must be one of: {allowed}."
+        return None
+
+    @staticmethod
+    def _is_shopify_page(url: str, content: str) -> bool:
+        """Return True when URL or HTML content indicates a Shopify storefront."""
+        lower_url = url.lower()
+        if (
+            lower_url.rstrip("/").endswith(".json")
+            or "myshopify.com" in lower_url
+            or "shopify" in lower_url
+        ):
+            return True
+        lower_content = content.lower()
+        return any(marker in lower_content for marker in _SHOPIFY_HTML_MARKERS)
+
+    @staticmethod
+    def _evaluate_shopify_payload(data: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """Evaluate Shopify product JSON variants for availability."""
+        variants = None
+        product_obj = data.get("product")
+        if isinstance(product_obj, dict) and isinstance(
+            product_obj.get("variants"), list
+        ):
+            variants = product_obj["variants"]
+        elif isinstance(data.get("variants"), list):
+            variants = data["variants"]
+
+        if not variants:
+            return None
+
+        available_count = sum(
+            1
+            for variant in variants
+            if isinstance(variant, dict) and variant.get("available") is True
+        )
+        in_stock = available_count > 0
+        return _make_result(
+            in_stock=in_stock,
+            found_selector=in_stock,
+            strategy_used="shopify",
+            detected_by="shopify_json",
+            details=f"{available_count} of {len(variants)} variant(s) available",
+        )
+
+    @staticmethod
+    def _parse_json_ld(soup: BeautifulSoup) -> Optional[dict[str, Any]]:
+        """Inspect Schema.org JSON-LD scripts for Product/Offer availability."""
+        availabilities: list[str] = []
+        for script in soup.find_all("script"):
+            script_type = str(script.get("type", "")).lower()
+            if "ld+json" not in script_type:
+                continue
+            raw_json = (script.string or script.get_text() or "").strip()
+            if not raw_json:
+                continue
+            try:
+                parsed = json.loads(raw_json)
+            except json.JSONDecodeError:
+                continue
+            _collect_json_ld_availabilities(parsed, availabilities)
+
+        if not availabilities:
+            return None
+
+        in_stock_matches: list[str] = []
+        out_stock_matches: list[str] = []
+        for raw_val in availabilities:
+            token = _normalize_token(raw_val)
+            if token in _JSON_LD_IN_STOCK:
+                in_stock_matches.append(raw_val.rsplit("/", 1)[-1])
+            elif token in _JSON_LD_OUT_OF_STOCK:
+                out_stock_matches.append(raw_val.rsplit("/", 1)[-1])
+
+        if in_stock_matches:
+            return _make_result(
+                in_stock=True,
+                found_selector=True,
+                strategy_used="json_ld",
+                detected_by="json_ld_offer",
+                details=f"Offer availability: {', '.join(in_stock_matches[:3])}",
+            )
+        if out_stock_matches:
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="json_ld",
+                detected_by="json_ld_offer",
+                details=f"Offer availability: {', '.join(out_stock_matches[:3])}",
+            )
+        return None
+
+    @staticmethod
+    def _parse_meta_tags(soup: BeautifulSoup) -> Optional[dict[str, Any]]:
+        """Inspect OpenGraph / product meta and link availability tags."""
+        candidates: list[tuple[str, str]] = []
+        for meta in soup.find_all("meta"):
+            key = (
+                str(
+                    meta.get("property")
+                    or meta.get("name")
+                    or meta.get("itemprop")
+                    or ""
+                )
+                .strip()
+                .lower()
+            )
+            if key in ("og:availability", "product:availability", "availability"):
+                content = str(meta.get("content") or "").strip()
+                if content:
+                    candidates.append((key, content))
+
+        for link in soup.find_all("link"):
+            itemprop = str(link.get("itemprop") or "").strip().lower()
+            if itemprop == "availability":
+                val = str(link.get("href") or link.get("content") or "").strip()
+                if val:
+                    candidates.append(("itemprop:availability", val))
+
+        for key, raw_val in candidates:
+            token = _normalize_token(raw_val)
+            if token in _META_IN_STOCK:
+                return _make_result(
+                    in_stock=True,
+                    found_selector=True,
+                    strategy_used="meta_tags",
+                    detected_by=key,
+                    details=f"Meta {key}: {raw_val}",
+                )
+            if token in _META_OUT_OF_STOCK:
+                return _make_result(
+                    in_stock=False,
+                    found_selector=False,
+                    strategy_used="meta_tags",
+                    detected_by=key,
+                    details=f"Meta {key}: {raw_val}",
+                )
+        return None
+
+    @staticmethod
+    def _parse_text_heuristic(soup: BeautifulSoup) -> Optional[dict[str, Any]]:
+        """Analyze interactive buttons and visible text for stock signals."""
+        action_selector = (
+            "button, input[type='submit'], input[type='button'], "
+            "[role='button'], a.btn, a.button"
+        )
+        enabled_positive: Optional[str] = None
+        disabled_positive: Optional[str] = None
+        sold_out_button: Optional[str] = None
+
+        for el in soup.select(action_selector):
+            if _has_ignored_ancestor(el):
+                continue
+            parts = [
+                el.get_text(" ", strip=True),
+                str(el.get("value") or ""),
+                str(el.get("aria-label") or ""),
+                str(el.get("label") or ""),
+            ]
+            label = " ".join(p for p in parts if p).strip().lower()
+            if not label:
+                continue
+
+            for phrase in _NEGATIVE_PHRASES:
+                if phrase in label and sold_out_button is None:
+                    sold_out_button = phrase
+                    break
+
+            for phrase in _POSITIVE_BUTTON_PHRASES:
+                if phrase in label:
+                    if _is_element_disabled(el):
+                        if disabled_positive is None:
+                            disabled_positive = phrase
+                    else:
+                        if enabled_positive is None:
+                            enabled_positive = phrase
+                    break
+
+        if enabled_positive is not None:
+            return _make_result(
+                in_stock=True,
+                found_selector=True,
+                strategy_used="text_heuristic",
+                detected_by="button_enabled",
+                details=f"Found enabled '{enabled_positive}' button",
+            )
+        if disabled_positive is not None:
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="text_heuristic",
+                detected_by="button_disabled",
+                details=f"Matching '{disabled_positive}' button is disabled",
+            )
+        if sold_out_button is not None:
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="text_heuristic",
+                detected_by="sold_out_button",
+                details=f"Found '{sold_out_button}' button",
+            )
+
+        root = soup.body or soup
+        visible_chunks = [
+            text.strip()
+            for text in root.find_all(string=True)
+            if text.strip() and not _has_ignored_ancestor(text.parent)
+        ]
+        visible_text = re.sub(r"\s+", " ", " ".join(visible_chunks)).lower()
+
+        for phrase in _NEGATIVE_PHRASES:
+            if re.search(rf"\b{re.escape(phrase)}\b", visible_text):
+                return _make_result(
+                    in_stock=False,
+                    found_selector=False,
+                    strategy_used="text_heuristic",
+                    detected_by="sold_out_text",
+                    details=f"Matched sold-out text: '{phrase}'",
+                )
+
+        for phrase in _POSITIVE_TEXT_PHRASES:
+            if re.search(rf"\b{re.escape(phrase)}\b", visible_text):
+                return _make_result(
+                    in_stock=True,
+                    found_selector=True,
+                    strategy_used="text_heuristic",
+                    detected_by="in_stock_text",
+                    details=f"Matched positive text: '{phrase}'",
+                )
+
+        return None
+
+    @staticmethod
+    def _parse_css_selector(
+        soup: BeautifulSoup, selector: Optional[str]
+    ) -> dict[str, Any]:
+        """Evaluate CSS selector matches including disabled attribute inspection."""
+        effective_selector = (selector or "").strip() or DEFAULT_SELECTOR
+        selector_error = StockChecker.validate_selector(effective_selector)
+        if selector_error:
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="css_selector",
+                detected_by="invalid_selector",
+                error=selector_error,
+                details=selector_error,
+            )
+
+        matches = soup.select(effective_selector)
+        if not matches:
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="css_selector",
+                detected_by="css_selector_not_found",
+                details=f"Selector '{effective_selector}' did not match any element.",
+            )
+
+        if any(not _is_element_disabled(el) for el in matches):
+            return _make_result(
+                in_stock=True,
+                found_selector=True,
+                strategy_used="css_selector",
+                detected_by="css_selector",
+                details=f"Matched enabled element for '{effective_selector}'.",
+            )
+
+        return _make_result(
+            in_stock=False,
+            found_selector=True,
+            strategy_used="css_selector",
+            detected_by="css_selector_disabled",
+            details=f"Matched element for '{effective_selector}' is disabled.",
+        )
+
+    @staticmethod
+    async def detect_stock(
+        url: str,
+        selector: Optional[str] = None,
+        strategy: str = "auto",
+    ) -> dict[str, Any]:
+        """Run the requested stock detection strategy against a product URL."""
+        strategy_error = StockChecker.validate_strategy(strategy)
+        normalized_strategy = (strategy or "auto").strip().lower()
+        if strategy_error:
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used=normalized_strategy,
+                detected_by="invalid_strategy",
+                error=strategy_error,
+                details=strategy_error,
+            )
+
+        if normalized_strategy == "css_selector":
+            effective_selector = (selector or "").strip() or DEFAULT_SELECTOR
+            selector_error = StockChecker.validate_selector(effective_selector)
+            if selector_error:
+                return _make_result(
+                    in_stock=False,
+                    found_selector=False,
+                    strategy_used="css_selector",
+                    detected_by="invalid_selector",
+                    error=selector_error,
+                    details=selector_error,
+                )
+        elif normalized_strategy == "auto" and selector and selector.strip():
+            selector_error = StockChecker.validate_selector(selector.strip())
+            if selector_error:
+                return _make_result(
+                    in_stock=False,
+                    found_selector=False,
+                    strategy_used="css_selector",
+                    detected_by="invalid_selector",
+                    error=selector_error,
+                    details=selector_error,
+                )
+
+        if normalized_strategy == "shopify":
+            data, err = await fetch_shopify_json(url)
+            if err:
+                return _make_result(
+                    in_stock=False,
+                    found_selector=False,
+                    strategy_used="shopify",
+                    detected_by="shopify_json_error",
+                    error=err,
+                    details=err,
+                )
+            assert data is not None
+            shopify_res = StockChecker._evaluate_shopify_payload(data)
+            if shopify_res is not None:
+                return shopify_res
+            msg = "No product variants found in Shopify JSON."
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="shopify",
+                detected_by="shopify_json_not_found",
+                error=msg,
+                details=msg,
+            )
+
+        try:
+            content = await fetch_product_page(url)
+        except Exception as exc:
+            err_msg = str(exc)
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used=normalized_strategy,
+                detected_by="fetch_error",
+                error=err_msg,
+                details=err_msg,
+            )
+
+        if normalized_strategy == "auto":
+            stripped = content.lstrip()
+            if stripped.startswith("{"):
+                try:
+                    inline_json = json.loads(stripped)
+                    if isinstance(inline_json, dict):
+                        shopify_res = StockChecker._evaluate_shopify_payload(
+                            inline_json
+                        )
+                        if shopify_res is not None:
+                            return shopify_res
+                except json.JSONDecodeError:
+                    pass
+
+            if StockChecker._is_shopify_page(url, content):
+                data, _ = await fetch_shopify_json(url)
+                if data is not None:
+                    shopify_res = StockChecker._evaluate_shopify_payload(data)
+                    if shopify_res is not None:
+                        return shopify_res
+
+        soup = BeautifulSoup(content, "html.parser")
+
+        if normalized_strategy == "json_ld":
+            res = StockChecker._parse_json_ld(soup)
+            if res is not None:
+                return res
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="json_ld",
+                detected_by="json_ld_not_found",
+                details="No Schema.org Product/Offer availability metadata found.",
+            )
+
+        if normalized_strategy == "text_heuristic":
+            res = StockChecker._parse_text_heuristic(soup)
+            if res is not None:
+                return res
+            return _make_result(
+                in_stock=False,
+                found_selector=False,
+                strategy_used="text_heuristic",
+                detected_by="text_heuristic_inconclusive",
+                details="No definitive stock text or action button found.",
+            )
+
+        if normalized_strategy == "css_selector":
+            return StockChecker._parse_css_selector(soup, selector)
+
+        # Auto strategy cascade: JSON-LD -> Meta/OpenGraph -> Text/Buttons -> CSS
+        for detector in (
+            StockChecker._parse_json_ld,
+            StockChecker._parse_meta_tags,
+            StockChecker._parse_text_heuristic,
+        ):
+            res = detector(soup)
+            if res is not None:
+                return res
+
+        return StockChecker._parse_css_selector(soup, selector)
+
+    @staticmethod
+    async def check_product(
+        product: Union[Product, dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Check stock for a product using its configured strategy."""
+        name = product["name"] if isinstance(product, dict) else product.name
+        url = product["url"] if isinstance(product, dict) else product.url
+        selector = (
+            product.get("selector", "")
+            if isinstance(product, dict)
+            else product.selector
+        )
+        strategy = (
+            product.get("strategy", "auto")
+            if isinstance(product, dict)
+            else product.strategy
+        )
+
+        result = await StockChecker.detect_stock(
+            url=url,
+            selector=selector,
+            strategy=strategy or "auto",
+        )
+        if result["error"]:
+            logger.error("Error checking stock for %s: %s", name, result["error"])
+        return result
+
+    @staticmethod
     async def check_single_product(
         product: Union[Product, dict[str, Any]],
     ) -> Tuple[bool, Optional[str]]:
         """Check stock for a single product. Returns (in_stock, error_message)."""
-        name = product["name"] if isinstance(product, dict) else product.name
-        url = product["url"] if isinstance(product, dict) else product.url
-        selector = (
-            product["selector"] if isinstance(product, dict) else product.selector
-        )
-
-        selector_error = StockChecker.validate_selector(selector)
-        if selector_error:
-            return False, selector_error
-
-        try:
-            content = await fetch_product_page(url)
-            in_stock = StockChecker.parse_stock_status(content, selector)
-            return in_stock, None
-        except Exception as exc:
-            error_msg = f"Error checking stock for {name}: {exc}"
-            logger.error(error_msg)
-            return False, error_msg
+        result = await StockChecker.check_product(product)
+        return bool(result["in_stock"]), result["error"]
 
     @staticmethod
-    async def test_selector(url: str, selector: str) -> dict[str, Any]:
-        """Test a URL and CSS selector without saving to the database."""
-        selector_error = StockChecker.validate_selector(selector)
-        if selector_error:
-            return {"in_stock": False, "found_selector": False, "error": selector_error}
-
-        try:
-            content = await fetch_product_page(url)
-            found = StockChecker.parse_stock_status(content, selector)
-            return {"in_stock": found, "found_selector": found, "error": None}
-        except Exception as exc:
-            return {
-                "in_stock": False,
-                "found_selector": False,
-                "error": str(exc),
-            }
+    async def test_selector(
+        url: str,
+        selector: Optional[str] = None,
+        strategy: Optional[str] = "auto",
+    ) -> dict[str, Any]:
+        """Test a URL with a detection strategy and optional CSS selector."""
+        return await StockChecker.detect_stock(
+            url=url,
+            selector=selector,
+            strategy=strategy or "auto",
+        )
 
     @staticmethod
     async def send_stock_notification(
@@ -216,7 +833,17 @@ class StockMonitor:
     ) -> dict[str, Any]:
         """Check one product, update SQLite state, notify, and log history."""
         was_in_stock = bool(product["in_stock"])
-        is_in_stock, error = await StockChecker.check_single_product(product)
+        result = await StockChecker.check_product(product)
+        is_in_stock = bool(result["in_stock"])
+        error = result["error"]
+        strategy_used = result["strategy_used"]
+        detected_by = result["detected_by"]
+        details = result["details"]
+        strategy_details = (
+            f"{strategy_used} ({detected_by}): {details}"
+            if details
+            else f"{strategy_used} ({detected_by})"
+        )
         checked_at = utc_now_iso()
 
         if error is not None:
@@ -226,6 +853,7 @@ class StockMonitor:
                 error=error,
                 checked_at=checked_at,
                 status_changed=False,
+                strategy_details=strategy_details,
             )
             self.db.add_history(
                 product_id=product["id"],
@@ -243,11 +871,12 @@ class StockMonitor:
             error=None,
             checked_at=checked_at,
             status_changed=status_changed,
+            strategy_details=strategy_details,
         )
 
         if is_in_stock and not was_in_stock:
             sent, notify_err = await self._send_in_stock_alert(product)
-            msg = f"{product['name']} is back in stock!"
+            msg = f"{product['name']} is back in stock! [{strategy_used}]"
             if notify_err:
                 msg = f"{msg} (Notification failed: {notify_err})"
                 logger.error(
@@ -266,7 +895,7 @@ class StockMonitor:
                 product_name=product["name"],
                 status="out_of_stock",
                 notification_sent=False,
-                message=f"{product['name']} went out of stock.",
+                message=f"{product['name']} went out of stock. [{strategy_used}]",
             )
         elif record_unchanged:
             status_str = "in_stock" if is_in_stock else "out_of_stock"
@@ -276,7 +905,10 @@ class StockMonitor:
                 product_name=product["name"],
                 status=status_str,
                 notification_sent=False,
-                message=f"Manual check: {product['name']} is {state_label}.",
+                message=(
+                    f"Manual check: {product['name']} is {state_label} "
+                    f"[{strategy_used}]."
+                ),
             )
 
         return updated or product

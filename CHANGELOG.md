@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-27
+
+### Added
+- **Multi-Strategy Stock Detection Engine (`stock_checker.py`)**: Implemented five detection modes—`auto` (default), `json_ld`, `shopify`, `text_heuristic`, and `css_selector`—allowing product monitoring without manually writing CSS selectors.
+- **Auto-Detect Cascade (`auto`)**: Evaluates Shopify `.json` endpoints, Schema.org / JSON-LD `Offer` availability, OpenGraph/product meta tags, visible text and purchase button heuristics, and optional CSS selector fallback.
+- **Strategy UI Controls & Card Badges (`static/index.html`, `static/app.js`, `static/styles.css`)**: Added a Detection Strategy dropdown, collapsible optional fallback selector toggle, live **Test Stock Detection** diagnostic feedback (`strategy_used`, `detected_by`, `details`), and strategy pills on product cards.
+- **SQLite Schema Migration (`database.py`)**: Added backwards-compatible `ALTER TABLE` migration for `strategy` and `strategy_details` columns on existing `products` tables.
+- **Strategy API & Test Coverage (`api.py`, `product_manager.py`, `test_main.py`)**: Added strategy validation and response fields across product and test endpoints, expanding the test suite to 29 passing tests.
+
+### Changed
+- **Optional CSS Selectors**: Updated product creation, editing, and UI forms so CSS selectors are no longer required when using `auto`, `json_ld`, `shopify`, or `text_heuristic`.
+- **Application Version (`config.py`, `pyproject.toml`)**: Bumped version to `0.3.0`.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added
