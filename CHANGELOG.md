@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-27
+
+### Added
+- **Custom SVG Site Icon (`static/favicon.svg`)**: Added a bespoke isometric inventory box and emerald radar checkmark SVG used as both the browser favicon (`/favicon.svg`) and dashboard header emblem.
+- **Dynamic Product Card Method Pills (`static/app.js`, `static/styles.css`)**: Replaced the legacy static `Selector` row with strategy-specific **Method** pills (`⚡ Auto-Detect`, `📄 Schema.org JSON-LD`, `🛍️ Shopify JSON API`, `🔍 Text & Button Heuristics`, or **Selector** for `css_selector`) and fallback selector pills.
+- **Discord `/add_product` Strategy Support (`bot_commands.py`)**: Added `strategy` choices (`auto`, `json_ld`, `shopify`, `text_heuristic`, `css_selector`) defaulting to `auto`, displaying `(Auto-detect - no selector required)` when no selector is set.
+- **Expanded Test Coverage (`test_main.py`)**: Added unit tests verifying Discord `/add_product` strategy handling and Stock Checker branding, bringing the suite to 30 passing tests.
+
+### Changed
+- **Rebranded to Stock Checker (`static/index.html`, `api.py`, `discord_client.py`, `bot_commands.py`, `README.md`)**: Unified application branding to **Stock Checker** across the Web UI, HTML title, FastAPI metadata, and Discord messages.
+- **Application Version (`config.py`, `pyproject.toml`)**: Bumped version to `0.3.1`.
+
 ## [0.3.0] - 2026-11-27
 
 ### Added

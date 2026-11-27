@@ -478,16 +478,46 @@
 
         const strategyBadge = `<span class="strategy-badge strategy-badge--${safeStrategyKey}" title="${escapeHtml(strategyTooltip)}">${escapeHtml(strategyMeta.badge)}</span>`;
 
-        const selectorMarkup = rawSelector
-          ? `
-              <div class="selector-row" title="CSS Selector: ${safeSelector}">
-                <span class="meta-label">Selector</span>
-                <code class="selector-pill">${safeSelector}</code>
-              </div>`
-          : "";
+        let methodMarkup = "";
+        if (strategyKey === "css_selector") {
+          const displaySelector = safeSelector || escapeHtml(DEFAULT_SELECTOR);
+          methodMarkup = `
+            <div class="selector-row" title="CSS Selector: ${displaySelector}">
+              <span class="meta-label">Selector</span>
+              <code class="selector-pill">${displaySelector}</code>
+            </div>`;
+        } else if (strategyKey === "json_ld") {
+          methodMarkup = `
+            <div class="selector-row">
+              <span class="meta-label">Method</span>
+              <span class="strategy-pill strategy-pill--json_ld">📄 Schema.org JSON-LD</span>
+            </div>`;
+        } else if (strategyKey === "shopify") {
+          methodMarkup = `
+            <div class="selector-row">
+              <span class="meta-label">Method</span>
+              <span class="strategy-pill strategy-pill--shopify">🛍️ Shopify JSON API</span>
+            </div>`;
+        } else if (strategyKey === "text_heuristic") {
+          methodMarkup = `
+            <div class="selector-row">
+              <span class="meta-label">Method</span>
+              <span class="strategy-pill strategy-pill--text_heuristic">🔍 Text &amp; Button Heuristics</span>
+            </div>`;
+        } else {
+          const fallbackMarkup = rawSelector
+            ? `<span class="meta-fallback" title="Optional fallback selector: ${safeSelector}">Fallback: <code>${safeSelector}</code></span>`
+            : "";
+          methodMarkup = `
+            <div class="selector-row">
+              <span class="meta-label">Method</span>
+              <span class="strategy-pill strategy-pill--auto">⚡ Auto-Detect</span>
+              ${fallbackMarkup}
+            </div>`;
+        }
 
         const strategyDetailsMarkup = safeStrategyDetails
-          ? `<div class="strategy-details-text" title="${safeStrategyDetails}">${safeStrategyDetails}</div>`
+          ? `<div class="strategy-details-text" title="Live detection status: ${safeStrategyDetails}">${safeStrategyDetails}</div>`
           : "";
 
         const lastCheckedRel = formatRelativeTime(product.last_checked);
@@ -526,7 +556,7 @@
             </div>
 
             <div class="product-meta">
-              ${selectorMarkup}
+              ${methodMarkup}
               ${strategyDetailsMarkup}
 
               <div class="product-timestamps">

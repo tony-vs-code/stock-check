@@ -1,4 +1,4 @@
-"""FastAPI backend and REST API endpoints for UB Stock Bot."""
+"""FastAPI backend and REST API endpoints for Stock Checker."""
 
 import logging
 import os
@@ -298,7 +298,7 @@ def create_app(
                 await active_discord.stop()
 
     application = FastAPI(
-        title="UB Stock Monitor",
+        title="Stock Checker",
         version=APP_VERSION,
         description="Web UI and API for monitoring product stock availability.",
         lifespan=lifespan,
@@ -565,7 +565,7 @@ def create_app(
         ok, err = await send_discord_rest_message(
             token,
             channel_id,
-            "✅ **UB Stock Monitor test notification!** Your Discord alerts are "
+            "✅ **Stock Checker test notification!** Your Discord alerts are "
             "configured properly.",
         )
         return TestDiscordResponse(success=ok, error=err)

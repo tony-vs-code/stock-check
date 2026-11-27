@@ -1,6 +1,6 @@
-# UB Stock Monitor (`ubstock`)
+# Stock Checker (`ubstock`)
 
-**UB Stock Monitor** (`v0.3.0`) is a self-contained product availability monitor featuring an **automatic Multi-Strategy Stock Detection Engine**, a modern **Web UI Dashboard**, **REST API**, **SQLite persistence**, **container-first Docker deployment**, and **optional Discord alerting & slash commands**.
+**Stock Checker** (`v0.3.1`) is a self-contained, real-time inventory and product availability monitor featuring an **automatic Multi-Strategy Stock Detection Engine**, a modern **Web UI Dashboard**, **REST API**, **SQLite persistence**, **container-first Docker deployment**, and **optional Discord alerting & slash commands**.
 
 It starts cleanly out of the box with **zero `.env` dependency**—and thanks to Auto-Detect, **you no longer need to hunt for CSS selectors** just to start tracking a product URL.
 
@@ -9,7 +9,7 @@ It starts cleanly out of the box with **zero `.env` dependency**—and thanks to
 ## ✨ Key Features
 
 - **Multi-Strategy Stock Detection Engine (No CSS Selectors Required)**:
-  - **Auto-Detect (`auto`, Default)**: Just paste a product URL—UBStock automatically evaluates Shopify `.json` APIs, Schema.org / JSON-LD structured data, OpenGraph/product meta tags, and page text/button heuristics, with an optional CSS selector fallback.
+  - **Auto-Detect (`auto`, Default)**: Just paste a product URL—Stock Checker automatically evaluates Shopify `.json` APIs, Schema.org / JSON-LD structured data, OpenGraph/product meta tags, and page text/button heuristics, with an optional CSS selector fallback.
   - **Selectable Strategies**: Choose between `auto`, `json_ld`, `shopify`, `text_heuristic`, and `css_selector` per product.
   - **Rich Diagnostic Feedback & Strategy Pills**: Every product card displays its active strategy badge and last detection detail (e.g., which structured signal or button matched).
 - **Modern Web UI Dashboard (`http://localhost:8000/`)**:
@@ -53,6 +53,7 @@ ubstock/
 ├── docker-compose.yml      # Ready-to-run Compose stack definition
 ├── pyproject.toml          # Project metadata, dependencies, and Ruff config
 ├── static/                 # Web UI single-page frontend
+│   ├── favicon.svg         # Custom isometric inventory & radar SVG icon
 │   ├── index.html          # Dashboard layout, modals, and views
 │   ├── styles.css          # Responsive dark/modern UI styling
 │   └── app.js              # Interactive frontend logic & API client
@@ -87,7 +88,7 @@ No `.env` file or pre-configuration is needed.
 4. **Verify container health**:
    ```bash
    curl -f http://localhost:8000/api/health
-   # {"status":"ok","version":"0.3.0"}
+   # {"status":"ok","version":"0.3.1"}
    ```
 
 #### Included `docker-compose.yml`
@@ -156,7 +157,7 @@ Hosted directly at `http://localhost:8000/`:
    - Live status pill (`Idle` / `Checking`) and automatic 10-second dashboard refresh.
 2. **Products Tab**:
    - Search by product name, URL, or CSS selector, and filter by **All**, **In Stock**, **Out of Stock**, or **Error**.
-   - **Strategy Badges & Diagnostic Details**: Each product card displays its detection strategy pill (e.g., `Auto`, `JSON-LD`, `Shopify`, `Heuristic`, `CSS`) and the latest diagnostic detail showing how stock was determined.
+   - **Strategy & Method Pills**: Each product card displays its detection strategy badge and a dynamic **Method** pill (`⚡ Auto-Detect`, `📄 Schema.org JSON-LD`, `🛍️ Shopify JSON API`, `🔍 Text & Button Heuristics`, or **Selector** for `css_selector`), plus optional fallback selector pills and live diagnostic details.
    - **Add / Edit Product Modal**: Pick a **Detection Strategy** (`Auto-Detect` is selected by default so **no CSS selector is required**), optionally expand **Add optional fallback selector** if desired, and click **Test Stock Detection** to preview live detection results (`strategy_used`, `detected_by`, `details`) before saving.
    - **Check Now** button per product and global **Check All Now** action.
 3. **Activity Log Tab**:
@@ -212,7 +213,7 @@ Interactive OpenAPI / Swagger documentation is also available at **`http://local
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | Container healthcheck (`{"status": "ok", "version": "0.3.0"}`) |
+| `GET` | `/api/health` | Container healthcheck (`{"status": "ok", "version": "0.3.1"}`) |
 | `GET` | `/api/status` | Aggregate product counts, Discord connection status, interval & check state |
 | `GET` | `/api/products` | List all monitored products (including `strategy` and `strategy_details`) |
 | `POST` | `/api/products` | Add a new product (`name`, `url`, optional `strategy` defaulting to `"auto"`, optional `selector`) |
@@ -241,7 +242,7 @@ When a Discord Bot Token and Channel ID are configured in the **Settings** tab (
   ```
 - **Slash Commands**:
   - `/ping` — Check bot responsiveness.
-  - `/add_product name:<name> url:<url> [selector:<css>]` — Add a product to monitoring (defaults to `button[label='Add to Cart']`).
+  - `/add_product name:<name> url:<url> [strategy:<strategy>] [selector:<css>]` — Add a product to monitoring (defaults to `auto`, with no CSS selector required; if `strategy` is `css_selector` and `selector` is omitted, defaults to `button[label='Add to Cart']`).
   - `/remove_product name:<name>` — Remove a product from monitoring.
   - `/list_products` — Display all monitored products.
 
@@ -251,7 +252,7 @@ When a Discord Bot Token and Channel ID are configured in the **Settings** tab (
 2. Under **Bot**, create a bot and copy its **Token**.
 3. Under **OAuth2 → URL Generator**, select `bot` and `applications.commands` scopes with **Send Messages** and **Use Slash Commands** permissions, then invite the bot to your server.
 4. Enable **Developer Mode** in Discord (**User Settings → Advanced**), right-click your target channel, and choose **Copy Channel ID**.
-5. Paste both values into the **Settings** tab in the UBStock Web UI, click **Save Settings**, and verify with **Send Test Alert**.
+5. Paste both values into the **Settings** tab in the Stock Checker Web UI, click **Save Settings**, and verify with **Send Test Alert**.
 
 ---
 
