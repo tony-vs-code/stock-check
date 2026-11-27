@@ -1,4 +1,4 @@
-"""Discord bot commands for UB Stock Bot."""
+"""Discord bot commands for Stock Checker."""
 
 import logging
 from typing import TYPE_CHECKING
@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import discord
 
 from config import DEFAULT_SELECTOR
+from stock_checker import VALID_STRATEGIES, StockChecker
 
 if TYPE_CHECKING:
     from product_manager import ProductManager
@@ -29,19 +30,45 @@ class BotCommands:
         interaction: discord.Interaction,
         name: str,
         url: str,
-        selector: str = DEFAULT_SELECTOR,
+        strategy: str = "auto",
+        selector: str = "",
     ):
         """Add a new product to the monitoring list."""
-        if self.product_manager.add_product(name, url, selector):
-            # Create a more detailed response
-            response = f"""✅ **Successfully added product to monitoring!**
+        cleaned_strategy = (strategy or "auto").strip().lower()
+        strategy_err = StockChecker.validate_strategy(cleaned_strategy)
+        if strategy_err:
+            await interaction.response.send_message(
+                f"❌ {strategy_err}", ephemeral=True
+            )
+            return
 
-**Product:** {name}
-**URL:** {url}
-**Selector:** `{selector}`
+        cleaned_selector = (selector or "").strip()
+        if cleaned_strategy == "css_selector" and not cleaned_selector:
+            cleaned_selector = DEFAULT_SELECTOR
 
-The bot will now check this product every 15 seconds and notify when it comes 
-back in stock! 🚀"""
+        if cleaned_selector:
+            selector_err = StockChecker.validate_selector(cleaned_selector)
+            if selector_err:
+                await interaction.response.send_message(
+                    f"❌ {selector_err}", ephemeral=True
+                )
+                return
+
+        if self.product_manager.add_product(
+            name, url, selector=cleaned_selector, strategy=cleaned_strategy
+        ):
+            selector_display = (
+                cleaned_selector or "(Auto-detect - no selector required)"
+            )
+            response = (
+                "✅ **Successfully added product to monitoring!**\n\n"
+                f"**Product:** {name}\n"
+                f"**URL:** {url}\n"
+                f"**Strategy:** {cleaned_strategy}\n"
+                f"**Selector:** {selector_display}\n\n"
+                "The bot will now monitor this product and notify when it comes "
+                "back in stock! 🚀"
+            )
 
             await interaction.response.send_message(response)
             logging.info(f"Added product '{name}' by {interaction.user}")
@@ -83,13 +110,21 @@ def create_commands(product_manager: "ProductManager"):
     @discord.app_commands.command(
         name="add_product", description="Add a new product to monitor"
     )
+    @discord.app_commands.choices(
+        strategy=[
+            discord.app_commands.Choice(name=s, value=s) for s in VALID_STRATEGIES
+        ]
+    )
     async def add_product(
         interaction: discord.Interaction,
         name: str,
         url: str,
-        selector: str = DEFAULT_SELECTOR,
+        strategy: str = "auto",
+        selector: str = "",
     ):
-        await bot_commands.add_product(interaction, name, url, selector)
+        await bot_commands.add_product(
+            interaction, name, url, strategy=strategy, selector=selector
+        )
 
     @discord.app_commands.command(
         name="remove_product", description="Remove a product from monitoring"

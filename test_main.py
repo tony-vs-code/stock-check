@@ -39,7 +39,7 @@ def client(temp_db: Database, tmp_path: Path) -> TestClient:
     static_dir = tmp_path / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     (static_dir / "index.html").write_text(
-        "<!DOCTYPE html><html><body><h1>UB Stock Monitor</h1></body></html>",
+        "<!DOCTYPE html><html><body><h1>Stock Checker</h1></body></html>",
         encoding="utf-8",
     )
     app = create_app(
@@ -310,7 +310,7 @@ def test_health_and_root_static(client: TestClient) -> None:
 
     root = client.get("/")
     assert root.status_code == 200
-    assert "UB Stock Monitor" in root.text
+    assert "Stock Checker" in root.text
 
 
 def test_status_and_products_api_lifecycle(client: TestClient) -> None:
@@ -505,7 +505,7 @@ def test_settings_and_test_discord_endpoints(client: TestClient) -> None:
 
 
 def test_real_static_assets_served(temp_db: Database) -> None:
-    """Verify FastAPI serves real UI assets at /, /styles.css, and /app.js."""
+    """Verify FastAPI serves static assets at /, /favicon.svg, /styles.css, /app.js."""
     app = create_app(
         db=temp_db,
         static_dir="static",
@@ -515,7 +515,8 @@ def test_real_static_assets_served(temp_db: Database) -> None:
         index_res = real_client.get("/")
         assert index_res.status_code == 200
         assert "text/html" in index_res.headers["content-type"]
-        assert "UBStock" in index_res.text
+        assert "Stock Checker" in index_res.text
+        assert "/favicon.svg" in index_res.text
         assert "/styles.css" in index_res.text
         assert "/app.js" in index_res.text
         assert 'id="product-strategy-select"' in index_res.text
@@ -523,11 +524,17 @@ def test_real_static_assets_served(temp_db: Database) -> None:
         assert 'id="optional-selector-toggle-row"' in index_res.text
         assert 'id="product-selector-group"' in index_res.text
 
+        favicon_res = real_client.get("/favicon.svg")
+        assert favicon_res.status_code == 200
+        assert "svg" in favicon_res.headers["content-type"]
+        assert "<svg" in favicon_res.text
+
         css_res = real_client.get("/styles.css")
         assert css_res.status_code == 200
         assert "text/css" in css_res.headers["content-type"]
         assert "--bg-base" in css_res.text
         assert ".strategy-badge" in css_res.text
+        assert ".strategy-pill" in css_res.text
 
         js_res = real_client.get("/app.js")
         assert js_res.status_code == 200
@@ -537,6 +544,7 @@ def test_real_static_assets_served(temp_db: Database) -> None:
         assert "/api/settings" in js_res.text
         assert "product-strategy-select" in js_res.text
         assert "btn-toggle-optional-selector" in js_res.text
+        assert "strategy-pill--auto" in js_res.text
 
 
 def test_zero_env_startup_with_background_tasks(
@@ -1403,3 +1411,62 @@ def test_api_omitted_selector_non_css_strategies_and_strategy_updates(
     assert chk.json()["in_stock"] is True
     assert chk.json()["strategy"] == "text_heuristic"
     assert "text_heuristic" in (chk.json()["strategy_details"] or "")
+
+
+@pytest.mark.asyncio
+async def test_bot_commands_add_product_strategy_and_selector_display(
+    temp_db: Database,
+) -> None:
+    """Verify Discord /add_product defaults to auto strategy and formats selector."""
+    from unittest.mock import MagicMock
+
+    from bot_commands import BotCommands, create_commands
+
+    pm = ProductManager(db=temp_db)
+    commands = BotCommands(pm)
+
+    interaction = MagicMock()
+    interaction.user = "tester#0001"
+    interaction.response = MagicMock()
+    interaction.response.send_message = AsyncMock()
+
+    await commands.add_product(
+        interaction,
+        name="Auto Item",
+        url="https://example.com/auto",
+    )
+    msg = interaction.response.send_message.await_args.args[0]
+    assert "**Product:** Auto Item" in msg
+    assert "**Strategy:** auto" in msg
+    assert "**Selector:** (Auto-detect - no selector required)" in msg
+
+    saved = pm.get_product("Auto Item")
+    assert saved is not None
+    assert saved.strategy == "auto"
+    assert saved.selector == ""
+
+    # Explicit css_selector without selector defaults to DEFAULT_SELECTOR
+    interaction2 = MagicMock()
+    interaction2.user = "tester#0001"
+    interaction2.response = MagicMock()
+    interaction2.response.send_message = AsyncMock()
+
+    await commands.add_product(
+        interaction2,
+        name="CSS Item",
+        url="https://example.com/css",
+        strategy="css_selector",
+    )
+    msg2 = interaction2.response.send_message.await_args.args[0]
+    assert "**Strategy:** css_selector" in msg2
+    assert "**Selector:** button[label='Add to Cart']" in msg2
+
+    # Ensure slash command wrapper builds cleanly
+    ping, add_cmd, remove_cmd, list_cmd = create_commands(pm)
+    assert add_cmd.name == "add_product"
+    assert [p.name for p in add_cmd.parameters] == [
+        "name",
+        "url",
+        "strategy",
+        "selector",
+    ]

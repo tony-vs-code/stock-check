@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>UBStock — UB Stock Monitor</title>
+  <title>Stock Checker - Real-Time Inventory &amp; Stock Monitor</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -13,15 +14,11 @@
       <div class="header-inner">
         <div class="brand-cluster">
           <div class="brand-logo" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 2L2 7l10 5 10-5-10-5z" />
-              <path d="M2 17l10 5 10-5" />
-              <path d="M2 12l10 5 10-5" />
-            </svg>
+            <img src="/favicon.svg" alt="" class="brand-logo-img" />
           </div>
           <div class="brand-text">
             <div class="brand-title-row">
-              <h1 class="brand-title">UBStock</h1>
+              <h1 class="brand-title">Stock Checker</h1>
               <span id="live-status-pill" class="status-pill status-pill--idle" role="status" aria-live="polite">
                 <span class="status-dot" aria-hidden="true"></span>
                 <span id="live-status-text">Idle</span>
@@ -191,7 +188,7 @@
               id="product-search-input"
               type="search"
               class="search-input"
-              placeholder="Search products by name, URL, or selector..."
+              placeholder="Search products by name, URL, strategy, or selector..."
               aria-label="Search products"
             />
           </div>
@@ -212,7 +209,7 @@
           </div>
           <h2 class="empty-state-title">No products monitored yet</h2>
           <p class="empty-state-desc">
-            Add a product URL and CSS selector to start tracking stock availability automatically.
+            Add a product URL to start tracking stock availability automatically with intelligent auto-detection.
           </p>
           <button id="btn-empty-add-product" type="button" class="btn btn-primary">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

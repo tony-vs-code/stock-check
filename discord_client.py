@@ -1,4 +1,4 @@
-"""Discord client and lifecycle manager for UB Stock Bot."""
+"""Discord client and lifecycle manager for Stock Checker."""
 
 import asyncio
 import logging
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class UBStockClient(discord.Client):
-    """Custom Discord client for UB Stock Bot slash commands and status."""
+    """Custom Discord client for Stock Checker slash commands and status."""
 
     def __init__(
         self,
@@ -60,7 +60,7 @@ class UBStockClient(discord.Client):
                 channel = self.get_channel(self.channel_id)
                 if channel:
                     startup_message = (
-                        "👋 **UB Stock Bot is ready!**\n\n"
+                        "👋 **Stock Checker is ready!**\n\n"
                         "🚨 **No products are currently being monitored.**\n\n"
                         "**Available Commands:**\n"
                         "• `/add_product` - Add a new product to monitor\n"

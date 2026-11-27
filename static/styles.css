@@ -108,17 +108,17 @@ select {
   width: 44px;
   height: 44px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--indigo), var(--cyan));
   display: grid;
   place-items: center;
-  color: #ffffff;
-  box-shadow: 0 8px 22px -6px rgba(99, 102, 241, 0.65);
+  box-shadow: 0 8px 22px -6px rgba(56, 189, 248, 0.45);
   flex-shrink: 0;
+  overflow: hidden;
 }
 
-.brand-logo svg {
-  width: 22px;
-  height: 22px;
+.brand-logo-img {
+  width: 44px;
+  height: 44px;
+  display: block;
 }
 
 .brand-title-row {
@@ -871,8 +871,9 @@ select {
 
 .selector-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 6px 8px;
   min-width: 0;
 }
 
@@ -880,6 +881,68 @@ select {
   font-size: 0.75rem;
   color: var(--text-muted);
   flex-shrink: 0;
+}
+
+.strategy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: rgba(15, 23, 42, 0.7);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+.strategy-pill--auto {
+  color: var(--cyan);
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.strategy-pill--json_ld {
+  color: #c7d2fe;
+  border-color: rgba(99, 102, 241, 0.36);
+  background: rgba(99, 102, 241, 0.14);
+}
+
+.strategy-pill--shopify {
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.34);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.strategy-pill--text_heuristic {
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.34);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.meta-fallback {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  max-width: 100%;
+  min-width: 0;
+}
+
+.meta-fallback code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  color: #cbd5e1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
 }
 
 .selector-pill {
