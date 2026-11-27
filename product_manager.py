@@ -12,7 +12,9 @@ class Product:
 
     name: str
     url: str
-    selector: str
+    selector: str = ""
+    strategy: str = "auto"
+    strategy_details: Optional[str] = None
     in_stock: bool = False
     id: Optional[int] = None
     last_checked: Optional[str] = None
@@ -27,6 +29,8 @@ class Product:
             "name": self.name,
             "url": self.url,
             "selector": self.selector,
+            "strategy": self.strategy,
+            "strategy_details": self.strategy_details,
             "in_stock": self.in_stock,
             "last_checked": self.last_checked,
             "last_status_change": self.last_status_change,
@@ -41,7 +45,9 @@ class Product:
             id=data.get("id"),
             name=data["name"],
             url=data["url"],
-            selector=data["selector"],
+            selector=data.get("selector", "") or "",
+            strategy=data.get("strategy") or "auto",
+            strategy_details=data.get("strategy_details"),
             in_stock=bool(data.get("in_stock", False)),
             last_checked=data.get("last_checked"),
             last_status_change=data.get("last_status_change"),
@@ -56,13 +62,46 @@ class ProductManager:
     def __init__(self, db: Optional[Database] = None) -> None:
         self.db = db or Database()
 
-    def add_product(self, name: str, url: str, selector: str) -> bool:
+    def add_product(
+        self,
+        name: str,
+        url: str,
+        selector: str = "",
+        strategy: str = "auto",
+        strategy_details: Optional[str] = None,
+    ) -> bool:
         """Add a new product. Returns True if successful, False if already exists."""
         try:
-            self.db.create_product(name=name, url=url, selector=selector)
+            self.db.create_product(
+                name=name,
+                url=url,
+                selector=selector,
+                strategy=strategy,
+                strategy_details=strategy_details,
+            )
             return True
         except DuplicateProductError:
             return False
+
+    def update_product(
+        self,
+        product_id: int,
+        name: Optional[str] = None,
+        url: Optional[str] = None,
+        selector: Optional[str] = None,
+        strategy: Optional[str] = None,
+        strategy_details: Optional[str] = None,
+    ) -> Optional[Product]:
+        """Update an existing product by ID and return the updated Product."""
+        row = self.db.update_product(
+            product_id=product_id,
+            name=name,
+            url=url,
+            selector=selector,
+            strategy=strategy,
+            strategy_details=strategy_details,
+        )
+        return Product.from_dict(row) if row else None
 
     def remove_product(self, name: str) -> bool:
         """Remove a product by name. Returns True if successful, False if not found."""
@@ -72,6 +111,10 @@ class ProductManager:
         """Get a product by name."""
         row = self.db.get_product_by_name(name)
         return Product.from_dict(row) if row else None
+
+    def get_products(self) -> list[Product]:
+        """Return all monitored products as a list of Product objects."""
+        return [Product.from_dict(row) for row in self.db.list_products()]
 
     def get_all_products(self) -> Dict[str, Product]:
         """Get all products keyed by name."""

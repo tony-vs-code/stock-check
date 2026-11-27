@@ -4,6 +4,39 @@
   const POLL_INTERVAL_MS = 10000;
   const DEFAULT_SELECTOR = "button[label='Add to Cart']";
 
+  const STRATEGY_META = {
+    auto: {
+      badge: "Auto",
+      label: "Auto-Detect",
+      hint: "Automatically evaluates Schema.org JSON-LD, Shopify APIs, meta tags, and page heuristics.",
+    },
+    json_ld: {
+      badge: "JSON-LD",
+      label: "Schema.org JSON-LD",
+      hint: "Parses Schema.org Product & Offer availability metadata embedded in the page.",
+    },
+    shopify: {
+      badge: "Shopify",
+      label: "Shopify JSON API",
+      hint: "Queries the store's /products/<handle>.json endpoint (with HTML fallback).",
+    },
+    text_heuristic: {
+      badge: "Text",
+      label: "Text & Button Heuristics",
+      hint: "Analyzes Add to Cart buttons, disabled states, and visible availability text.",
+    },
+    css_selector: {
+      badge: "CSS",
+      label: "Custom CSS Selector",
+      hint: "Checks whether the specified CSS selector matches an element on the page.",
+    },
+    meta_tags: {
+      badge: "Meta",
+      label: "Meta Tags",
+      hint: "Inspects OpenGraph and product availability meta tags.",
+    },
+  };
+
   const state = {
     activeTab: "products",
     statusFilter: "all",
@@ -13,6 +46,7 @@
     history: [],
     settings: null,
     editingProductId: null,
+    optionalSelectorExpanded: false,
     checkingProductIds: new Set(),
     isCheckingAll: false,
     isRefreshing: false,
@@ -313,6 +347,38 @@
     }
   }
 
+  function getStrategyMeta(strategy) {
+    const key = String(strategy || "auto").toLowerCase();
+    return STRATEGY_META[key] || STRATEGY_META.auto;
+  }
+
+  function formatDetectedBy(strategyUsed, detectedBy) {
+    const strategyKey = String(strategyUsed || "").toLowerCase();
+    if (strategyKey === "json_ld") {
+      return "Detected via Schema.org JSON-LD";
+    }
+    if (strategyKey === "shopify") {
+      return "Detected via Shopify API";
+    }
+    if (strategyKey === "meta_tags") {
+      return detectedBy
+        ? `Detected via Meta Tags (${detectedBy})`
+        : "Detected via Meta Tags";
+    }
+    if (strategyKey === "text_heuristic") {
+      return "Detected via Text Heuristics";
+    }
+    if (strategyKey === "css_selector") {
+      return "Detected via Custom CSS Selector";
+    }
+    if (strategyKey === "auto") {
+      return detectedBy && detectedBy !== "none"
+        ? `Auto-Detect (${detectedBy})`
+        : "Evaluated via Auto-Detect";
+    }
+    return detectedBy ? `Detected via ${detectedBy}` : "Detection completed";
+  }
+
   function getFilteredProducts() {
     const query = state.searchQuery.trim().toLowerCase();
     return state.products.filter((product) => {
@@ -326,7 +392,7 @@
         return false;
       }
       if (query) {
-        const haystack = `${product.name || ""} ${product.url || ""} ${product.selector || ""}`.toLowerCase();
+        const haystack = `${product.name || ""} ${product.url || ""} ${product.selector || ""} ${product.strategy || ""} ${product.strategy_details || ""}`.toLowerCase();
         if (!haystack.includes(query)) {
           return false;
         }
@@ -387,7 +453,19 @@
         const safeUrl = escapeHtml(sanitizeUrl(product.url));
         const safeDisplayUrl = escapeHtml(product.url);
         const safeName = escapeHtml(product.name);
-        const safeSelector = escapeHtml(product.selector);
+        const rawSelector = (product.selector || "").trim();
+        const safeSelector = escapeHtml(rawSelector);
+        const strategyKey = String(product.strategy || "auto").toLowerCase();
+        const strategyMeta = getStrategyMeta(strategyKey);
+        const safeStrategyKey = escapeHtml(
+          STRATEGY_META[strategyKey] ? strategyKey : "auto"
+        );
+        const safeStrategyDetails = product.strategy_details
+          ? escapeHtml(product.strategy_details)
+          : "";
+        const strategyTooltip = product.strategy_details
+          ? `${strategyMeta.label}: ${product.strategy_details}`
+          : strategyMeta.label;
         const cardStateClass = product.in_stock
           ? "product-card--in-stock"
           : "product-card--out-of-stock";
@@ -395,8 +473,22 @@
         const statusBadge = product.last_error
           ? `<span class="badge badge--error" title="${escapeHtml(product.last_error)}"><span class="badge-dot"></span>Error</span>`
           : product.in_stock
-            ? `<span class="badge badge--in-stock"><span class="badge-dot"></span>In Stock</span>`
-            : `<span class="badge badge--out-of-stock"><span class="badge-dot"></span>Out of Stock</span>`;
+            ? `<span class="badge badge--in-stock" title="${escapeHtml(strategyTooltip)}"><span class="badge-dot"></span>In Stock</span>`
+            : `<span class="badge badge--out-of-stock" title="${escapeHtml(strategyTooltip)}"><span class="badge-dot"></span>Out of Stock</span>`;
+
+        const strategyBadge = `<span class="strategy-badge strategy-badge--${safeStrategyKey}" title="${escapeHtml(strategyTooltip)}">${escapeHtml(strategyMeta.badge)}</span>`;
+
+        const selectorMarkup = rawSelector
+          ? `
+              <div class="selector-row" title="CSS Selector: ${safeSelector}">
+                <span class="meta-label">Selector</span>
+                <code class="selector-pill">${safeSelector}</code>
+              </div>`
+          : "";
+
+        const strategyDetailsMarkup = safeStrategyDetails
+          ? `<div class="strategy-details-text" title="${safeStrategyDetails}">${safeStrategyDetails}</div>`
+          : "";
 
         const lastCheckedRel = formatRelativeTime(product.last_checked);
         const lastCheckedExact = formatExactTime(product.last_checked);
@@ -427,14 +519,15 @@
                   </svg>
                 </a>
               </div>
-              ${statusBadge}
+              <div class="product-card-badges">
+                ${statusBadge}
+                ${strategyBadge}
+              </div>
             </div>
 
             <div class="product-meta">
-              <div class="selector-row" title="CSS Selector: ${safeSelector}">
-                <span class="meta-label">Selector</span>
-                <code class="selector-pill">${safeSelector}</code>
-              </div>
+              ${selectorMarkup}
+              ${strategyDetailsMarkup}
 
               <div class="product-timestamps">
                 <span title="${escapeHtml(lastCheckedExact)}">Checked: ${escapeHtml(lastCheckedRel)}</span>
@@ -666,20 +759,80 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Product Modal (Add / Edit) & Test Selector
+  // Product Modal (Add / Edit) & Test Stock Detection
   // ---------------------------------------------------------------------------
+
+  function syncStrategyUI() {
+    const strategySelect = document.getElementById("product-strategy-select");
+    const strategyHint = document.getElementById("product-strategy-hint");
+    const toggleRow = document.getElementById("optional-selector-toggle-row");
+    const toggleBtn = document.getElementById("btn-toggle-optional-selector");
+    const selectorGroup = document.getElementById("product-selector-group");
+    const selectorInput = document.getElementById("product-selector-input");
+    const optionalTag = document.getElementById("product-selector-optional-tag");
+    const selectorHint = document.getElementById("product-selector-hint");
+
+    const strategy = strategySelect ? strategySelect.value : "auto";
+    const meta = getStrategyMeta(strategy);
+
+    if (strategyHint) {
+      strategyHint.textContent = meta.hint;
+    }
+
+    const isCss = strategy === "css_selector";
+
+    if (toggleRow) {
+      toggleRow.classList.toggle("is-hidden", isCss);
+    }
+
+    const showSelectorGroup = isCss || state.optionalSelectorExpanded;
+    if (selectorGroup) {
+      selectorGroup.classList.toggle("is-hidden", !showSelectorGroup);
+    }
+
+    if (toggleBtn) {
+      toggleBtn.setAttribute("aria-expanded", String(showSelectorGroup));
+      toggleBtn.textContent = state.optionalSelectorExpanded
+        ? "Hide optional selector"
+        : "Add optional fallback selector";
+    }
+
+    if (optionalTag) {
+      optionalTag.classList.toggle("is-hidden", isCss);
+    }
+
+    if (selectorInput) {
+      selectorInput.required = isCss;
+      if (isCss && !selectorInput.value.trim()) {
+        selectorInput.value = DEFAULT_SELECTOR;
+      }
+    }
+
+    if (selectorHint) {
+      selectorHint.textContent = isCss
+        ? "Required: matching element indicates the product is in stock."
+        : "Optional fallback CSS selector if automatic detection is inconclusive.";
+    }
+  }
 
   function openProductModal(product = null) {
     const modal = document.getElementById("product-modal");
     const titleEl = document.getElementById("product-modal-title");
     const nameInput = document.getElementById("product-name-input");
     const urlInput = document.getElementById("product-url-input");
+    const strategySelect = document.getElementById("product-strategy-select");
     const selectorInput = document.getElementById("product-selector-input");
     const saveLabel = document.getElementById("btn-save-product-label");
     const testResult = document.getElementById("selector-test-result");
     const formError = document.getElementById("product-form-error");
 
     state.editingProductId = product ? product.id : null;
+    const savedStrategy = product && product.strategy ? product.strategy : "auto";
+    const savedSelector = product ? (product.selector || "").trim() : "";
+
+    state.optionalSelectorExpanded = Boolean(
+      product && savedStrategy !== "css_selector" && savedSelector
+    );
 
     if (titleEl) {
       titleEl.textContent = product ? "Edit Product" : "Add Product";
@@ -689,9 +842,15 @@
     }
     if (nameInput) nameInput.value = product ? product.name : "";
     if (urlInput) urlInput.value = product ? product.url : "";
+    if (strategySelect) strategySelect.value = savedStrategy;
     if (selectorInput) {
-      selectorInput.value = product ? product.selector : DEFAULT_SELECTOR;
+      selectorInput.value =
+        savedStrategy === "css_selector"
+          ? savedSelector || DEFAULT_SELECTOR
+          : savedSelector;
     }
+
+    syncStrategyUI();
 
     if (testResult) {
       testResult.className = "inline-feedback is-hidden";
@@ -716,17 +875,24 @@
       modal.classList.add("is-hidden");
     }
     state.editingProductId = null;
+    state.optionalSelectorExpanded = false;
   }
 
   async function handleTestSelector() {
     const urlInput = document.getElementById("product-url-input");
+    const strategySelect = document.getElementById("product-strategy-select");
     const selectorInput = document.getElementById("product-selector-input");
     const btn = document.getElementById("btn-test-selector");
     const btnLabel = document.getElementById("btn-test-selector-label");
     const resultEl = document.getElementById("selector-test-result");
 
     const url = urlInput ? urlInput.value.trim() : "";
-    const selector = (selectorInput ? selectorInput.value.trim() : "") || DEFAULT_SELECTOR;
+    const strategy = strategySelect ? strategySelect.value : "auto";
+    const rawSelector = selectorInput ? selectorInput.value.trim() : "";
+    const selector =
+      strategy === "css_selector"
+        ? rawSelector || DEFAULT_SELECTOR
+        : rawSelector || null;
 
     if (!url) {
       if (resultEl) {
@@ -736,41 +902,63 @@
       return;
     }
 
-    setButtonLoading(btn, btnLabel, true, "Testing...", "Test Selector");
+    setButtonLoading(btn, btnLabel, true, "Testing...", "Test Stock Detection");
     if (resultEl) {
       resultEl.className = "inline-feedback";
-      resultEl.textContent = "Fetching page and evaluating CSS selector...";
+      resultEl.textContent = "Fetching product page and running stock detection...";
     }
 
     try {
       const res = await apiFetch("/api/products/test-selector", {
         method: "POST",
-        body: JSON.stringify({ url, selector }),
+        body: JSON.stringify({ url, selector, strategy }),
       });
 
       if (!resultEl) {
         return;
       }
 
+      const detectedLabel = formatDetectedBy(res.strategy_used, res.detected_by);
+
       if (res.error) {
         resultEl.className = "inline-feedback inline-feedback--error";
-        resultEl.textContent = `Selector test error: ${res.error}`;
-      } else if (res.found_selector && res.in_stock) {
+        resultEl.innerHTML = `
+          <div class="test-result-header">
+            <span class="badge badge--error"><span class="badge-dot"></span>Error</span>
+            <span class="test-result-method">${escapeHtml(detectedLabel)}</span>
+          </div>
+          <p class="test-result-details">${escapeHtml(res.error)}</p>
+        `;
+      } else if (res.in_stock) {
+        const detailText =
+          res.details || "Product currently appears in stock.";
         resultEl.className = "inline-feedback inline-feedback--success";
-        resultEl.textContent =
-          "Selector matched! Product currently appears IN STOCK.";
+        resultEl.innerHTML = `
+          <div class="test-result-header">
+            <span class="badge badge--in-stock"><span class="badge-dot"></span>In Stock</span>
+            <span class="test-result-method">${escapeHtml(detectedLabel)}</span>
+          </div>
+          <p class="test-result-details">${escapeHtml(detailText)}</p>
+        `;
       } else {
+        const detailText =
+          res.details || "Product appears out of stock for the selected strategy.";
         resultEl.className = "inline-feedback inline-feedback--warning";
-        resultEl.textContent =
-          "Page fetched successfully, but selector was NOT found (currently Out of Stock or selector mismatch).";
+        resultEl.innerHTML = `
+          <div class="test-result-header">
+            <span class="badge badge--out-of-stock"><span class="badge-dot"></span>Out of Stock</span>
+            <span class="test-result-method">${escapeHtml(detectedLabel)}</span>
+          </div>
+          <p class="test-result-details">${escapeHtml(detailText)}</p>
+        `;
       }
     } catch (error) {
       if (resultEl) {
         resultEl.className = "inline-feedback inline-feedback--error";
-        resultEl.textContent = error.message || "Selector test failed.";
+        resultEl.textContent = error.message || "Stock detection test failed.";
       }
     } finally {
-      setButtonLoading(btn, btnLabel, false, "Testing...", "Test Selector");
+      setButtonLoading(btn, btnLabel, false, "Testing...", "Test Stock Detection");
     }
   }
 
@@ -779,6 +967,7 @@
 
     const nameInput = document.getElementById("product-name-input");
     const urlInput = document.getElementById("product-url-input");
+    const strategySelect = document.getElementById("product-strategy-select");
     const selectorInput = document.getElementById("product-selector-input");
     const saveBtn = document.getElementById("btn-save-product");
     const saveLabel = document.getElementById("btn-save-product-label");
@@ -786,11 +975,17 @@
 
     const isEditing = state.editingProductId !== null;
     const idleText = isEditing ? "Update Product" : "Save Product";
+    const strategy = strategySelect ? strategySelect.value : "auto";
+    const rawSelector = selectorInput ? selectorInput.value.trim() : "";
 
     const payload = {
       name: nameInput ? nameInput.value.trim() : "",
       url: urlInput ? urlInput.value.trim() : "",
-      selector: (selectorInput ? selectorInput.value.trim() : "") || DEFAULT_SELECTOR,
+      strategy,
+      selector:
+        strategy === "css_selector"
+          ? rawSelector || DEFAULT_SELECTOR
+          : rawSelector,
     };
 
     if (formError) {
@@ -1183,6 +1378,23 @@
     const testSelectorBtn = document.getElementById("btn-test-selector");
     if (testSelectorBtn) {
       testSelectorBtn.addEventListener("click", handleTestSelector);
+    }
+
+    const strategySelect = document.getElementById("product-strategy-select");
+    if (strategySelect) {
+      strategySelect.addEventListener("change", () => {
+        syncStrategyUI();
+      });
+    }
+
+    const toggleOptionalSelectorBtn = document.getElementById(
+      "btn-toggle-optional-selector"
+    );
+    if (toggleOptionalSelectorBtn) {
+      toggleOptionalSelectorBtn.addEventListener("click", () => {
+        state.optionalSelectorExpanded = !state.optionalSelectorExpanded;
+        syncStrategyUI();
+      });
     }
 
     document.querySelectorAll(".preset-btn").forEach((btn) => {

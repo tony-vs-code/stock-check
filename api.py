@@ -7,13 +7,18 @@ from typing import Any, Optional
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, status
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from config import APP_VERSION, DEFAULT_SELECTOR, STATIC_DIR
 from database import Database, DuplicateProductError
 from discord_client import DiscordManager
 from log_manager import LogManager
-from stock_checker import StockChecker, StockMonitor, send_discord_rest_message
+from stock_checker import (
+    VALID_STRATEGIES,
+    StockChecker,
+    StockMonitor,
+    send_discord_rest_message,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +52,22 @@ class StatusResponse(BaseModel):
     is_checking: bool
 
 
+def _validate_strategy_value(value: str) -> str:
+    """Normalize and validate a stock detection strategy string."""
+    cleaned = value.strip().lower()
+    if cleaned not in VALID_STRATEGIES:
+        allowed = ", ".join(VALID_STRATEGIES)
+        raise ValueError(f"Unsupported strategy '{value}'. Must be one of: {allowed}.")
+    return cleaned
+
+
 class ProductResponse(BaseModel):
     id: int
     name: str
     url: str
     selector: str
+    strategy: str = "auto"
+    strategy_details: Optional[str] = None
     in_stock: bool
     last_checked: Optional[str] = None
     last_status_change: Optional[str] = None
@@ -62,7 +78,8 @@ class ProductResponse(BaseModel):
 class ProductCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     url: str = Field(..., min_length=1, max_length=2048)
-    selector: str = Field(default=DEFAULT_SELECTOR, max_length=500)
+    selector: Optional[str] = Field(default=None, max_length=500)
+    strategy: str = Field(default="auto", max_length=50)
 
     @field_validator("name")
     @classmethod
@@ -77,20 +94,29 @@ class ProductCreateRequest(BaseModel):
     def validate_url(cls, v: str) -> str:
         return _validate_http_url(v)
 
-    @field_validator("selector")
+    @field_validator("strategy")
     @classmethod
-    def validate_selector(cls, v: str) -> str:
-        cleaned = v.strip() or DEFAULT_SELECTOR
-        err = StockChecker.validate_selector(cleaned)
-        if err:
-            raise ValueError(err)
-        return cleaned
+    def validate_strategy(cls, v: str) -> str:
+        return _validate_strategy_value(v)
+
+    @model_validator(mode="after")
+    def normalize_selector(self) -> "ProductCreateRequest":
+        cleaned_selector = (self.selector or "").strip()
+        if self.strategy == "css_selector":
+            cleaned_selector = cleaned_selector or DEFAULT_SELECTOR
+        if cleaned_selector:
+            err = StockChecker.validate_selector(cleaned_selector)
+            if err:
+                raise ValueError(err)
+        self.selector = cleaned_selector
+        return self
 
 
 class ProductUpdateRequest(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     url: Optional[str] = Field(default=None, min_length=1, max_length=2048)
     selector: Optional[str] = Field(default=None, max_length=500)
+    strategy: Optional[str] = Field(default=None, max_length=50)
 
     @field_validator("name")
     @classmethod
@@ -109,21 +135,30 @@ class ProductUpdateRequest(BaseModel):
             return None
         return _validate_http_url(v)
 
+    @field_validator("strategy")
+    @classmethod
+    def validate_strategy(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        return _validate_strategy_value(v)
+
     @field_validator("selector")
     @classmethod
     def validate_selector(cls, v: Optional[str]) -> Optional[str]:
         if v is None:
             return None
-        cleaned = v.strip() or DEFAULT_SELECTOR
-        err = StockChecker.validate_selector(cleaned)
-        if err:
-            raise ValueError(err)
+        cleaned = v.strip()
+        if cleaned:
+            err = StockChecker.validate_selector(cleaned)
+            if err:
+                raise ValueError(err)
         return cleaned
 
 
 class TestSelectorRequest(BaseModel):
     url: str = Field(..., min_length=1, max_length=2048)
-    selector: str = Field(default=DEFAULT_SELECTOR, max_length=500)
+    selector: Optional[str] = Field(default=None, max_length=500)
+    strategy: Optional[str] = Field(default="auto", max_length=50)
 
     @field_validator("url")
     @classmethod
@@ -134,7 +169,10 @@ class TestSelectorRequest(BaseModel):
 class TestSelectorResponse(BaseModel):
     in_stock: bool
     found_selector: bool
+    strategy_used: str
+    detected_by: str
     error: Optional[str] = None
+    details: Optional[str] = None
 
 
 class CheckAllResponse(BaseModel):
@@ -330,7 +368,8 @@ def create_app(
             return active_db.create_product(
                 name=payload.name,
                 url=payload.url,
-                selector=payload.selector,
+                selector=payload.selector or "",
+                strategy=payload.strategy,
             )
         except DuplicateProductError as exc:
             raise HTTPException(
@@ -341,9 +380,12 @@ def create_app(
         "/api/products/test-selector", response_model=TestSelectorResponse
     )
     async def test_selector(payload: TestSelectorRequest) -> dict[str, Any]:
-        """Test a URL and CSS selector without saving to the database."""
-        selector = payload.selector.strip() or DEFAULT_SELECTOR
-        return await StockChecker.test_selector(url=payload.url, selector=selector)
+        """Test a URL and detection strategy without saving to the database."""
+        return await StockChecker.test_selector(
+            url=payload.url,
+            selector=payload.selector,
+            strategy=payload.strategy or "auto",
+        )
 
     @application.put("/api/products/{product_id}", response_model=ProductResponse)
     async def update_product(
@@ -351,12 +393,31 @@ def create_app(
     ) -> dict[str, Any]:
         """Update an existing monitored product."""
         active_db = _get_db(request)
+        existing = active_db.get_product(product_id)
+        if existing is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product with id {product_id} not found.",
+            )
+
+        next_strategy = (
+            payload.strategy if payload.strategy is not None else existing["strategy"]
+        )
+        next_selector = payload.selector
+        if next_strategy == "css_selector":
+            candidate_selector = (
+                next_selector if next_selector is not None else existing["selector"]
+            )
+            if not (candidate_selector or "").strip():
+                next_selector = DEFAULT_SELECTOR
+
         try:
             updated = active_db.update_product(
                 product_id=product_id,
                 name=payload.name,
                 url=payload.url,
-                selector=payload.selector,
+                selector=next_selector,
+                strategy=payload.strategy,
             )
         except DuplicateProductError as exc:
             raise HTTPException(

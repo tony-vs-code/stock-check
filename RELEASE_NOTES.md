@@ -1,50 +1,46 @@
-# UB Stock Monitor v0.2.0 Release Notes
+# UB Stock Monitor v0.3.0 Release Notes
 
 ## Overview
 
-UB Stock Monitor `v0.2.0` transforms the application from a CLI/Discord-only bot into a self-contained, web-managed stock monitoring platform. This release introduces a modern FastAPI-powered Web UI dashboard, thread-safe SQLite persistence, zero `.env` configuration requirements, dynamic Discord notification management, and container-first Docker Compose deployment.
+UB Stock Monitor `v0.3.0` introduces the **Multi-Strategy Stock Detection Engine**, eliminating the requirement for users to inspect HTML or provide CSS selectors just to monitor a product URL. With **Auto-Detect (`auto`)** enabled by default, UBStock automatically combines store APIs, structured product metadata, OpenGraph tags, and intelligent page heuristics—while keeping custom CSS selectors available as an explicit strategy or optional fallback.
 
 ## Highlights & Enhancements
 
-### Modern Web UI Dashboard
-- **Real-Time Monitoring Dashboard**: Built a responsive single-page Web UI (`static/index.html`, `static/app.js`, `static/styles.css`) served directly by FastAPI with auto-refreshing status counters, live status indicators, and instant manual checks (`Check All Now` and per-product checks).
-- **Product Management & CSS Selector Testing**: Add, edit, search, and delete monitored products directly from the browser via modal forms, including an interactive CSS selector test endpoint (`/api/products/test-selector`) before saving.
-- **Activity & Stock Change Log**: Dedicated **Activity Log** tab backed by persisted check and notification history, with support for clearing historical entries.
+### Multi-Strategy Stock Detection Engine (`stock_checker.py`)
+- **Auto-Detect Cascade (`auto`, Default)**: Evaluates stock availability automatically in order:
+  1. **Shopify JSON API (`shopify`)**: Detects Shopify storefronts (or inline JSON payloads) and inspects variant `available` status via `.json` endpoints.
+  2. **Schema.org / JSON-LD (`json_ld`)**: Parses `<script type="application/ld+json">` `Product` and `Offer` availability metadata (`InStock`, `PreOrder`, `OutOfStock`, `SoldOut`, etc.).
+  3. **OpenGraph & Product Meta Tags**: Inspects `og:availability`, `product:availability`, and `availability` meta tags.
+  4. **Text & Button Heuristics (`text_heuristic`)**: Evaluates visible availability text and enabled/disabled purchase action buttons (`Add to Cart`, `Buy Now`, `Pre-Order`, `Sold Out`).
+  5. **CSS Selector Fallback (`css_selector`)**: Evaluates an optional user-supplied CSS selector (or `DEFAULT_SELECTOR` when `css_selector` is explicitly selected), including `disabled` / `aria-disabled` state inspection.
+- **No CSS Selector Required**: Users can add and monitor products with just a name and URL; CSS selectors are now optional in `auto`, `json_ld`, `shopify`, and `text_heuristic` modes.
 
-### SQLite Persistence
-- **Thread-Safe SQLite Storage**: Replaced flat JSON-only storage with a dedicated SQLite persistence layer (`database.py`) using WAL journal mode for reliable concurrent reads and writes across settings, products, and check history.
-- **Automatic Legacy Migration**: Existing `products.json` entries are automatically migrated into SQLite on initialization without manual intervention.
+### Web UI & Diagnostic Upgrades (`static/index.html`, `static/app.js`, `static/styles.css`)
+- **Detection Strategy Dropdown**: Choose between `auto`, `json_ld`, `shopify`, `text_heuristic`, and `css_selector` directly in the Add/Edit Product modal, with a collapsible toggle for adding an optional fallback CSS selector.
+- **Rich Live Diagnostic Feedback**: The **Test Stock Detection** flow (`/api/products/test-selector`) reports `in_stock`, `strategy_used`, `detected_by`, and human-readable `details` directly inside the modal before saving.
+- **Strategy Pills & Details on Product Cards**: Every product card displays a color-coded strategy badge (`Auto`, `JSON-LD`, `Shopify`, `Heuristic`, `CSS`) alongside persisted diagnostic details (`strategy_details`).
 
-### Zero `.env` Dependency
-- **Out-of-the-Box Startup**: Removed mandatory `.env` file requirements—the application starts cleanly with safe built-in defaults (`config.py`) and optional environment variable seeding on first run.
-- **Clean Repository Hygiene**: Updated `.gitignore` to exclude runtime databases (`data/*.db`, `data/*.sqlite3`, `data/*.json`), logs (`logs/`, `*.log`), local `.env` files, and local agent tooling.
+### SQLite Schema Migration & API Parity (`database.py`, `api.py`, `product_manager.py`)
+- **Backwards-Compatible SQLite Migration**: Existing `ubstock.db` databases automatically gain `strategy` (default `'auto'`) and `strategy_details` columns on startup without data loss.
+- **Validated Strategy Contracts**: Product create/update and test endpoints validate strategy values (`auto`, `json_ld`, `shopify`, `text_heuristic`, `css_selector`) and return `strategy` and `strategy_details` in `ProductResponse`.
 
-### Dynamic Discord Settings & Notifications
-- **Runtime Configuration via Web UI**: Configure Discord Bot Token (masked in API responses), Discord Channel ID, polling interval, and notification toggles dynamically through `/api/settings` without restarting containers or editing files.
-- **Live Discord Lifecycle & Test Alerts**: Dynamically start, reconnect, or disable the Discord client (`discord_client.py`) when settings change, and verify delivery anytime using the built-in test notification endpoint (`/api/settings/test-discord`).
+## Reliability & Fixes
 
-## Stack Deployment Readiness
-
-- **Containerized Runtime (`Dockerfile`)**: Multi-purpose Python 3.11 slim image using `uv sync --frozen` for reproducible dependency installation, exposing port `8000` with persistent `/usr/src/app/data` and `/usr/src/app/logs` directories.
-- **Docker Compose Support (`docker-compose.yml`)**: Ready-to-run service definition mapping port `8000:8000`, mounting `./data` and `./logs` volumes, and setting `restart: unless-stopped`.
-- **Container Healthcheck on `/api/health`**: Built-in Docker and Compose `HEALTHCHECK` polling `http://localhost:8000/api/health` every 30s to verify service availability and application version (`0.2.0`).
+- **Expanded Automated Test Suite (`test_main.py`)**: **29/29 tests passing**, covering Shopify JSON parsing, JSON-LD availability, OpenGraph meta tags, text/button heuristics, auto-detect cascade fallbacks, CSS selector disabled checks, backwards-compatible SQLite column migration, and FastAPI strategy API contracts.
+- **Cross-Tier Contract Parity**: Verified 100% alignment across **8 API routes** (`api.py` ↔ `static/app.js`) and **71 DOM IDs** (`static/app.js` ↔ `static/index.html`), plus clean JavaScript syntax verification (`node --check static/app.js`).
+- **Linting & Formatting**: Verified 100% clean `uv run ruff check .` and `uv run ruff format --check .`.
 
 ## Deployment Instructions
 
-1. **Clone the repository** and navigate to the project root.
-2. **Start the stack with Docker Compose**:
+1. **Pull or clone the repository** and navigate to the project root.
+2. **Start or rebuild the stack with Docker Compose**:
    ```bash
    docker compose up -d --build
    ```
-3. **Access the Web UI**: Open `http://localhost:8000` in your browser to add products, adjust check intervals, and optionally configure Discord notifications.
+   Existing SQLite databases in `./data/ubstock.db` will migrate automatically on startup.
+3. **Access the Web UI**: Open `http://localhost:8000` in your browser to add products using **Auto-Detect** (no CSS selector required).
 4. **Verify container health**:
    ```bash
    curl -f http://localhost:8000/api/health
    ```
-   Expected response: `{"status":"ok","version":"0.2.0"}`.
-
-## Reliability & Fixes
-
-- **Comprehensive Test Suite (`test_main.py`)**: 19 automated unit and integration tests covering SQLite persistence, legacy JSON migration, stock checking and notification throttling, FastAPI REST endpoints, settings masking, and Discord lifecycle handling.
-- **Cross-Tier Contract Validation**: Verified 100% alignment between FastAPI endpoints (`api.py`), frontend API calls (`static/app.js`), and DOM element bindings (`static/index.html`), alongside clean JavaScript syntax verification.
-- **Code Quality & Linting**: Enforced clean Python formatting and linting across the codebase with `ruff check` and `ruff format --check`.
+   Expected response: `{"status":"ok","version":"0.3.0"}`.

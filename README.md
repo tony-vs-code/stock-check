@@ -1,25 +1,29 @@
 # UB Stock Monitor (`ubstock`)
 
-**UB Stock Monitor** (`v0.2.0`) is a self-contained product availability monitor featuring a modern **Web UI Dashboard**, **REST API**, **SQLite persistence**, **container-first Docker deployment**, and **optional Discord alerting & slash commands**.
+**UB Stock Monitor** (`v0.3.0`) is a self-contained product availability monitor featuring an **automatic Multi-Strategy Stock Detection Engine**, a modern **Web UI Dashboard**, **REST API**, **SQLite persistence**, **container-first Docker deployment**, and **optional Discord alerting & slash commands**.
 
-It starts cleanly out of the box with **zero `.env` dependency**—no environment file or Discord credentials are required to launch and monitor products.
+It starts cleanly out of the box with **zero `.env` dependency**—and thanks to Auto-Detect, **you no longer need to hunt for CSS selectors** just to start tracking a product URL.
 
 ---
 
 ## ✨ Key Features
 
+- **Multi-Strategy Stock Detection Engine (No CSS Selectors Required)**:
+  - **Auto-Detect (`auto`, Default)**: Just paste a product URL—UBStock automatically evaluates Shopify `.json` APIs, Schema.org / JSON-LD structured data, OpenGraph/product meta tags, and page text/button heuristics, with an optional CSS selector fallback.
+  - **Selectable Strategies**: Choose between `auto`, `json_ld`, `shopify`, `text_heuristic`, and `css_selector` per product.
+  - **Rich Diagnostic Feedback & Strategy Pills**: Every product card displays its active strategy badge and last detection detail (e.g., which structured signal or button matched).
 - **Modern Web UI Dashboard (`http://localhost:8000/`)**:
   - Real-time stock overview with auto-refreshing status cards (**Total Products**, **In Stock**, **Out of Stock**, **Discord Status**, **Check Interval**).
   - Full product management (**Add**, **Edit**, **Delete**, per-product **Check Now**, and **Check All Now**), plus search and status filtering (`All`, `In Stock`, `Out of Stock`, `Error`).
-  - **Live Interactive CSS Selector Tester**: Test any product URL and CSS selector directly in the browser before saving.
+  - **Live Stock Detection Tester**: Test any product URL and detection strategy (plus an optional fallback CSS selector) directly in the browser before saving.
   - **Activity Log**: Persisted stock check and notification history with one-click history clearing.
   - **In-App Settings Panel**: Configure Discord Bot Token (masked on read), Channel ID, check interval, notification toggles, and send a **live test Discord alert** without restarting the application.
 - **Zero `.env` Dependency**:
   - Starts immediately with sensible defaults and no required `.env` file or Discord tokens.
   - Optional environment variables (`HOST`, `PORT`, `DATA_DIR`, `DB_PATH`, etc.) remain available for container overrides or initial seeding.
 - **SQLite Persistence with WAL Mode**:
-  - Thread-safe SQLite database (`data/ubstock.db`) stores settings, monitored products, and check history.
-  - Automatically migrates legacy `data/products.json` entries on startup.
+  - Thread-safe SQLite database (`data/ubstock.db`) stores settings, monitored products (including `strategy` and `strategy_details`), and check history.
+  - Automatically applies backwards-compatible schema migrations for existing databases and migrates legacy `data/products.json` entries on startup.
 - **Smart Discord Integration (Optional)**:
   - Notifies only when stock transitions from out-of-stock to in-stock (with REST fallback if the Gateway client isn't connected).
   - Supports interactive slash commands (`/ping`, `/add_product`, `/remove_product`, `/list_products`).
@@ -39,7 +43,7 @@ ubstock/
 ├── config.py               # Defaults and optional environment variable overrides
 ├── database.py             # Thread-safe SQLite persistence (WAL mode + JSON migration)
 ├── product_manager.py      # Product CRUD wrapper backed by SQLite
-├── stock_checker.py        # Async stock polling, CSS selector testing & alert dispatch
+├── stock_checker.py        # Multi-strategy stock detection, polling & alert dispatch
 ├── discord_client.py       # Optional Discord client & dynamic lifecycle manager
 ├── bot_commands.py         # Discord slash commands (/ping, /add_product, etc.)
 ├── log_manager.py          # Rotating file & console logging configuration
@@ -78,12 +82,12 @@ No `.env` file or pre-configuration is needed.
    ```
 
 3. **Open the Web UI**:
-   Visit **[http://localhost:8000](http://localhost:8000)** in your browser to add products, test CSS selectors, and optionally configure Discord alerts.
+   Visit **[http://localhost:8000](http://localhost:8000)** in your browser to add products (no CSS selector needed with **Auto-Detect**), test stock detection, and optionally configure Discord alerts.
 
 4. **Verify container health**:
    ```bash
    curl -f http://localhost:8000/api/health
-   # {"status":"ok","version":"0.2.0"}
+   # {"status":"ok","version":"0.3.0"}
    ```
 
 #### Included `docker-compose.yml`
@@ -152,13 +156,28 @@ Hosted directly at `http://localhost:8000/`:
    - Live status pill (`Idle` / `Checking`) and automatic 10-second dashboard refresh.
 2. **Products Tab**:
    - Search by product name, URL, or CSS selector, and filter by **All**, **In Stock**, **Out of Stock**, or **Error**.
-   - **Add / Edit Product Modal**: Includes a **Test Selector** button to verify live against the target page whether the CSS selector matches an in-stock element before saving.
+   - **Strategy Badges & Diagnostic Details**: Each product card displays its detection strategy pill (e.g., `Auto`, `JSON-LD`, `Shopify`, `Heuristic`, `CSS`) and the latest diagnostic detail showing how stock was determined.
+   - **Add / Edit Product Modal**: Pick a **Detection Strategy** (`Auto-Detect` is selected by default so **no CSS selector is required**), optionally expand **Add optional fallback selector** if desired, and click **Test Stock Detection** to preview live detection results (`strategy_used`, `detected_by`, `details`) before saving.
    - **Check Now** button per product and global **Check All Now** action.
 3. **Activity Log Tab**:
    - Chronological feed of stock status changes, manual checks, errors, and Discord notifications, with a **Clear History** button.
 4. **Settings Tab**:
    - Configure **Discord Bot Token** (always masked when returned from the API), **Discord Channel ID**, **Check Interval** (`1–86400` seconds), and **Enable Notifications** toggle.
    - **Send Test Alert** button to validate Discord credentials immediately without leaving the dashboard.
+
+---
+
+## 🎯 Multi-Strategy Stock Detection
+
+You no longer need to inspect HTML or write CSS selectors to monitor products. By default, every new product uses **`auto`** mode, and you can also pin a specific strategy per product:
+
+| Strategy | Value | How It Detects Stock |
+| --- | --- | --- |
+| **Auto-Detect (Default)** | `auto` | Runs a multi-tier cascade: **Shopify `.json` API** (for Shopify stores or inline JSON payloads) → **Schema.org / JSON-LD** → **OpenGraph / product meta tags** → **Text & button heuristics** → **Optional CSS selector fallback**. |
+| **Schema.org / JSON-LD** | `json_ld` | Parses `<script type="application/ld+json">` `Product`/`Offer` `availability` fields (`InStock`, `OutOfStock`, `PreOrder`, `SoldOut`, etc.). |
+| **Shopify JSON API** | `shopify` | Queries the product's `.json` endpoint and inspects variant `available` flags without needing HTML selectors. |
+| **Text & Button Heuristics** | `text_heuristic` | Evaluates visible availability phrases (e.g., `Sold Out`, `Out of Stock`, `In Stock`) and enabled/disabled purchase buttons (`Add to Cart`, `Buy Now`, `Pre-Order`). |
+| **Custom CSS Selector** | `css_selector` | Evaluates a specific CSS selector (defaulting to `button[label='Add to Cart']` if omitted) and checks whether matched elements are enabled or disabled. |
 
 ---
 
@@ -193,14 +212,14 @@ Interactive OpenAPI / Swagger documentation is also available at **`http://local
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | Container healthcheck (`{"status": "ok", "version": "0.2.0"}`) |
+| `GET` | `/api/health` | Container healthcheck (`{"status": "ok", "version": "0.3.0"}`) |
 | `GET` | `/api/status` | Aggregate product counts, Discord connection status, interval & check state |
-| `GET` | `/api/products` | List all monitored products |
-| `POST` | `/api/products` | Add a new product (`name`, `url`, optional `selector`) |
-| `PUT` | `/api/products/{product_id}` | Update an existing product's `name`, `url`, or `selector` |
+| `GET` | `/api/products` | List all monitored products (including `strategy` and `strategy_details`) |
+| `POST` | `/api/products` | Add a new product (`name`, `url`, optional `strategy` defaulting to `"auto"`, optional `selector`) |
+| `PUT` | `/api/products/{product_id}` | Update an existing product's `name`, `url`, `strategy`, or `selector` |
 | `DELETE` | `/api/products/{product_id}` | Remove a monitored product |
 | `POST` | `/api/products/{product_id}/check` | Trigger an immediate stock check for a single product |
-| `POST` | `/api/products/test-selector` | Test a `url` and CSS `selector` live without saving to SQLite |
+| `POST` | `/api/products/test-selector` | Test a `url`, `strategy`, and optional CSS `selector` live without saving to SQLite (returns `in_stock`, `strategy_used`, `detected_by`, `details`) |
 | `POST` | `/api/check-all` | Trigger an immediate stock check across all monitored products |
 | `GET` | `/api/history` | List recent stock check & notification events (`?limit=50`, `1–500`) |
 | `DELETE` | `/api/history` | Clear all persisted activity history records |

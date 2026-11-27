@@ -436,36 +436,63 @@
 
         <div class="form-group">
           <div class="label-row">
-            <label for="product-selector-input" class="form-label">CSS Selector</label>
+            <label for="product-strategy-select" class="form-label">Detection Strategy</label>
             <button id="btn-test-selector" type="button" class="btn btn-xs btn-cyan">
-              <span id="btn-test-selector-label">Test Selector</span>
+              <span id="btn-test-selector-label">Test Stock Detection</span>
             </button>
           </div>
-          <input
-            id="product-selector-input"
-            type="text"
-            class="form-input form-input--mono"
-            maxlength="500"
-            placeholder="button[label='Add to Cart']"
-            required
-          />
-          <div class="preset-row" aria-label="CSS selector presets">
-            <span class="preset-label">Presets:</span>
-            <button type="button" class="preset-btn" data-selector="button[label='Add to Cart']">
-              button[label='Add to Cart']
+          <select id="product-strategy-select" class="form-input form-select">
+            <option value="auto">Auto-Detect (Recommended: JSON-LD, Store APIs, Heuristics)</option>
+            <option value="json_ld">Schema.org / JSON-LD</option>
+            <option value="shopify">Shopify JSON API</option>
+            <option value="text_heuristic">Text &amp; Button Heuristics</option>
+            <option value="css_selector">Custom CSS Selector</option>
+          </select>
+          <p id="product-strategy-hint" class="form-hint">
+            Automatically evaluates structured product metadata, Shopify APIs, and page availability heuristics.
+          </p>
+        </div>
+
+        <div id="product-selector-section" class="selector-section">
+          <div id="optional-selector-toggle-row" class="optional-selector-bar">
+            <span class="form-hint">CSS selector is optional for this strategy.</span>
+            <button id="btn-toggle-optional-selector" type="button" class="btn-link-inline" aria-expanded="false">
+              Add optional fallback selector
             </button>
-            <button type="button" class="preset-btn" data-selector=".in-stock">
-              .in-stock
-            </button>
-            <button type="button" class="preset-btn" data-selector=".add-to-cart">
-              .add-to-cart
-            </button>
-            <button type="button" class="preset-btn" data-selector="button.add-to-cart">
-              button.add-to-cart
-            </button>
-            <button type="button" class="preset-btn" data-selector="#add-to-cart">
-              #add-to-cart
-            </button>
+          </div>
+
+          <div id="product-selector-group" class="form-group is-hidden">
+            <label id="product-selector-label" for="product-selector-input" class="form-label">
+              CSS Selector <span id="product-selector-optional-tag" class="optional-tag">(Optional)</span>
+            </label>
+            <input
+              id="product-selector-input"
+              type="text"
+              class="form-input form-input--mono"
+              maxlength="500"
+              placeholder="button[label='Add to Cart']"
+            />
+            <p id="product-selector-hint" class="form-hint">
+              Optional fallback CSS selector if automatic strategies are inconclusive.
+            </p>
+            <div id="product-selector-presets" class="preset-row" aria-label="CSS selector presets">
+              <span class="preset-label">Presets:</span>
+              <button type="button" class="preset-btn" data-selector="button[label='Add to Cart']">
+                button[label='Add to Cart']
+              </button>
+              <button type="button" class="preset-btn" data-selector=".in-stock">
+                .in-stock
+              </button>
+              <button type="button" class="preset-btn" data-selector=".add-to-cart">
+                .add-to-cart
+              </button>
+              <button type="button" class="preset-btn" data-selector="button.add-to-cart">
+                button.add-to-cart
+              </button>
+              <button type="button" class="preset-btn" data-selector="#add-to-cart">
+                #add-to-cart
+              </button>
+            </div>
           </div>
         </div>
 
