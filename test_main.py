@@ -61,6 +61,15 @@ def test_database_initialization_and_default_settings(temp_db: Database) -> None
     settings = temp_db.get_all_settings()
     assert settings["check_stock_interval"] == "15"
     assert settings["notifications_enabled"] == "true"
+    assert settings["telegram_bot_token"] == ""
+    assert settings["telegram_chat_id"] == ""
+    assert settings["telegram_enabled"] == "false"
+    assert settings["webhook_url"] == ""
+    assert settings["webhook_enabled"] == "false"
+    assert settings["price_alerts_enabled"] == "true"
+    assert settings["proxy_list"] == ""
+    assert settings["proxy_enabled"] == "false"
+    assert settings["domain_rate_limit_delay"] == "1.0"
     assert temp_db.list_products() == []
     assert temp_db.get_history() == []
 
@@ -453,6 +462,16 @@ def test_settings_and_test_discord_endpoints(client: TestClient) -> None:
         "discord_channel_id": "",
         "check_stock_interval": 15,
         "notifications_enabled": True,
+        "telegram_bot_token_set": False,
+        "telegram_bot_token_masked": "",
+        "telegram_chat_id": "",
+        "telegram_enabled": False,
+        "webhook_url": "",
+        "webhook_enabled": False,
+        "price_alerts_enabled": True,
+        "proxy_list": "",
+        "proxy_enabled": False,
+        "domain_rate_limit_delay": 1.0,
     }
 
     # Test discord without credentials returns success=False cleanly
@@ -1470,3 +1489,1191 @@ async def test_bot_commands_add_product_strategy_and_selector_display(
         "strategy",
         "selector",
     ]
+
+
+# ----------------------------------------------------------------------
+# Price Tracking, Multi-Channel Notifications, Proxy & Rate Limit Tests
+# ----------------------------------------------------------------------
+
+
+def test_sqlite_migration_adds_price_columns_and_table(tmp_path: Path) -> None:
+    """Verify legacy DBs migrate price columns, price_history table, and settings."""
+    import sqlite3
+
+    db_path = tmp_path / "legacy_v2.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute(
+        """
+        CREATE TABLE products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            url TEXT NOT NULL,
+            selector TEXT NOT NULL DEFAULT '',
+            strategy TEXT DEFAULT 'auto',
+            strategy_details TEXT,
+            in_stock INTEGER DEFAULT 0,
+            last_checked TIMESTAMP,
+            last_status_change TIMESTAMP,
+            last_error TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO products (name, url, selector, in_stock)
+        VALUES ('Old Router', 'https://example.com/router', '.buy', 0)
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    migrated = Database(db_path=str(db_path), products_file=str(tmp_path / "none.json"))
+    with sqlite3.connect(str(db_path)) as verify_conn:
+        cols = {
+            row[1]
+            for row in verify_conn.execute("PRAGMA table_info(products)").fetchall()
+        }
+        tables = {
+            row[0]
+            for row in verify_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+    assert {"current_price", "currency", "previous_price"}.issubset(cols)
+    assert "price_history" in tables
+
+    items = migrated.list_products()
+    assert len(items) == 1
+    assert items[0]["current_price"] is None
+    assert items[0]["currency"] == "USD"
+    assert items[0]["previous_price"] is None
+    assert migrated.get_setting("price_alerts_enabled") == "true"
+    assert migrated.get_setting("domain_rate_limit_delay") == "1.0"
+
+
+def test_database_price_history_crud_and_price_transitions(temp_db: Database) -> None:
+    """Verify record_price, get_price_history, and previous_price tracking."""
+    prod = temp_db.create_product(
+        name="Dream Router",
+        url="https://example.com/udr",
+        selector=".buy",
+    )
+    pid = prod["id"]
+
+    # First price observation
+    temp_db.record_price(pid, "Dream Router", 199.0, "USD")
+    p1 = temp_db.update_product_check_result(
+        pid, in_stock=True, error=None, current_price=199.0, currency="USD"
+    )
+    assert p1 is not None
+    assert p1["current_price"] == 199.0
+    assert p1["previous_price"] is None
+    assert p1["currency"] == "USD"
+
+    # Unchanged price preserves previous_price
+    temp_db.record_price(pid, "Dream Router", 199.0, "USD")
+    p2 = temp_db.update_product_check_result(
+        pid, in_stock=True, error=None, current_price=199.0, currency="USD"
+    )
+    assert p2 is not None
+    assert p2["current_price"] == 199.0
+    assert p2["previous_price"] is None
+
+    # Price drop sets previous_price to prior current_price
+    temp_db.record_price(pid, "Dream Router", 149.0, "USD")
+    p3 = temp_db.update_product_check_result(
+        pid, in_stock=True, error=None, current_price=149.0, currency="USD"
+    )
+    assert p3 is not None
+    assert p3["current_price"] == 149.0
+    assert p3["previous_price"] == 199.0
+
+    # Subsequent unchanged check keeps previous_price=199.0
+    p4 = temp_db.update_product_check_result(
+        pid, in_stock=True, error=None, current_price=149.0, currency="USD"
+    )
+    assert p4 is not None
+    assert p4["previous_price"] == 199.0
+
+    history = temp_db.get_price_history("Dream Router", limit=2)
+    assert len(history) == 2
+    assert history[0]["price"] == 149.0
+    assert history[1]["price"] == 199.0
+
+    all_history = temp_db.get_price_history("Dream Router")
+    assert len(all_history) == 3
+
+    # Rename updates price_history product_name
+    temp_db.update_product(pid, name="Dream Router 7")
+    renamed_hist = temp_db.get_price_history("Dream Router 7")
+    assert len(renamed_hist) == 3
+
+
+@pytest.mark.asyncio
+async def test_price_extraction_across_all_strategies() -> None:
+    """Verify price & currency extraction across Shopify, JSON-LD, Meta, and Text."""
+    # 1. Shopify variant price
+    shopify_payload = {
+        "product": {
+            "variants": [
+                {"id": 1, "available": True, "price": "249.50"},
+                {"id": 2, "available": False, "price": "299.00"},
+            ]
+        }
+    }
+    with patch(
+        "stock_checker.fetch_shopify_json",
+        new=AsyncMock(return_value=(shopify_payload, None)),
+    ):
+        res_shopify = await StockChecker.detect_stock(
+            url="https://shop.example.com/products/cam",
+            strategy="shopify",
+        )
+    assert res_shopify["in_stock"] is True
+    assert res_shopify["price"] == 249.50
+    assert res_shopify["currency"] == "USD"
+
+    # 2. JSON-LD price & currency
+    html_json_ld = """
+    <html><head>
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Product",
+      "name": "EU Switch",
+      "offers": {
+        "@type": "Offer",
+        "availability": "https://schema.org/InStock",
+        "price": "389.99",
+        "priceCurrency": "EUR"
+      }
+    }
+    </script>
+    </head><body></body></html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_json_ld),
+    ):
+        res_ld = await StockChecker.detect_stock(
+            url="https://example.com/eu-switch", strategy="json_ld"
+        )
+    assert res_ld["in_stock"] is True
+    assert res_ld["price"] == 389.99
+    assert res_ld["currency"] == "EUR"
+
+    # 3. OpenGraph / Meta tags price
+    html_meta = """
+    <html><head>
+      <meta property="og:availability" content="instock" />
+      <meta property="product:price:amount" content="129.00" />
+      <meta property="product:price:currency" content="GBP" />
+    </head><body></body></html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_meta),
+    ):
+        res_meta = await StockChecker.detect_stock(
+            url="https://example.com/meta-item", strategy="auto"
+        )
+    assert res_meta["strategy_used"] == "meta_tags"
+    assert res_meta["price"] == 129.0
+    assert res_meta["currency"] == "GBP"
+
+    # 4. Text heuristic price regex ($1,299.99) + ignores script noise
+    html_text = """
+    <html>
+      <head><script>var dummy = "$9999.99";</script></head>
+      <body>
+        <span class="price">$1,299.99</span>
+        <button>Add to Cart</button>
+      </body>
+    </html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_text),
+    ):
+        res_text = await StockChecker.detect_stock(
+            url="https://example.com/text-item", strategy="text_heuristic"
+        )
+    assert res_text["in_stock"] is True
+    assert res_text["price"] == 1299.99
+    assert res_text["currency"] == "USD"
+
+    # 5. CSS selector + fallback meta price
+    html_css = """
+    <html>
+      <head><meta property="og:price:amount" content="79.95" /></head>
+      <body><div id="buy-box">Ready</div></body>
+    </html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(return_value=html_css),
+    ):
+        res_css = await StockChecker.detect_stock(
+            url="https://example.com/css-item",
+            selector="#buy-box",
+            strategy="css_selector",
+        )
+    assert res_css["in_stock"] is True
+    assert res_css["price"] == 79.95
+
+
+@pytest.mark.asyncio
+async def test_telegram_and_webhook_dispatchers() -> None:
+    """Verify send_telegram_notification and send_webhook_notification HTTP calls."""
+    from unittest.mock import MagicMock
+
+    from notifications import (
+        build_webhook_payload,
+        send_telegram_notification,
+        send_webhook_notification,
+    )
+
+    # Validation failures without HTTP calls
+    ok_empty, err_empty = await send_telegram_notification("", "", "hi")
+    assert ok_empty is False
+    assert err_empty is not None
+
+    ok_bad_url, err_bad_url = await send_webhook_notification("not-a-url", {})
+    assert ok_bad_url is False
+    assert err_bad_url is not None
+
+    captured_calls: list[dict] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int, text_body: str = "ok") -> None:
+            self.status = status_code
+            self._text = text_body
+
+        async def text(self) -> str:
+            return self._text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeSession:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def post(self, url, **kwargs):
+            captured_calls.append({"url": url, "kwargs": kwargs})
+            return FakeResponse(200)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    with patch("notifications.aiohttp.ClientSession", new=FakeSession):
+        tg_ok, tg_err = await send_telegram_notification(
+            "12345:ABC-TOKEN", "-100999", "Alert message"
+        )
+        assert tg_ok is True
+        assert tg_err is None
+        assert (
+            captured_calls[0]["url"]
+            == "https://api.telegram.org/bot12345:ABC-TOKEN/sendMessage"
+        )
+        assert captured_calls[0]["kwargs"]["json"]["chat_id"] == "-100999"
+        assert captured_calls[0]["kwargs"]["json"]["text"] == "Alert message"
+
+        payload = build_webhook_payload(
+            event="stock_alert",
+            product="AP U7 Pro",
+            url="https://example.com/u7-pro",
+            status="in_stock",
+            price=189.0,
+            message="Back in stock!",
+        )
+        wh_ok, wh_err = await send_webhook_notification(
+            "https://hooks.example.com/notify", payload
+        )
+        assert wh_ok is True
+        assert wh_err is None
+        assert captured_calls[1]["url"] == "https://hooks.example.com/notify"
+        assert captured_calls[1]["kwargs"]["json"]["event"] == "stock_alert"
+        assert captured_calls[1]["kwargs"]["json"]["price"] == 189.0
+
+    # Non-2xx returns clean error
+    mock_session_fail = MagicMock()
+    mock_session_fail.return_value.__aenter__ = AsyncMock(
+        return_value=MagicMock(
+            post=MagicMock(return_value=FakeResponse(500, "Server Error"))
+        )
+    )
+    mock_session_fail.return_value.__aexit__ = AsyncMock(return_value=False)
+    with patch("notifications.aiohttp.ClientSession", new=mock_session_fail):
+        fail_ok, fail_err = await send_webhook_notification(
+            "https://hooks.example.com/fail", {"event": "test"}
+        )
+    assert fail_ok is False
+    assert "HTTP 500" in (fail_err or "")
+
+
+@pytest.mark.asyncio
+async def test_stock_monitor_multi_channel_and_price_drop_alerts(
+    temp_db: Database,
+) -> None:
+    """Verify multi-channel stock alerts, price history recording, and price drops."""
+    product = temp_db.create_product(
+        name="Switch Pro Max",
+        url="https://example.com/switch-pro-max",
+        selector="",
+        strategy="auto",
+    )
+    temp_db.update_settings(
+        {
+            "notifications_enabled": "true",
+            "discord_token": "disc-tok",
+            "discord_channel_id": "111222",
+            "telegram_bot_token": "tg-tok",
+            "telegram_chat_id": "998877",
+            "telegram_enabled": "true",
+            "webhook_url": "https://hooks.example.com/events",
+            "webhook_enabled": "true",
+            "price_alerts_enabled": "true",
+            "domain_rate_limit_delay": "0.0",
+        }
+    )
+    monitor = StockMonitor(temp_db)
+
+    # Check 1: Out of stock at $499.00 (no alerts, records price)
+    html_oos_499 = (
+        "<html><body><span>$499.00</span>"
+        "<button disabled>Add to Cart</button></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=html_oos_499),
+        ),
+        patch(
+            "stock_checker.send_discord_rest_message",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_disc,
+        patch(
+            "stock_checker.send_telegram_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_tg,
+        patch(
+            "stock_checker.send_webhook_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_wh,
+    ):
+        res1 = await monitor._check_product(temp_db.get_product(product["id"]))
+
+    assert res1["current_price"] == 499.0
+    assert res1["previous_price"] is None
+    mock_disc.assert_not_awaited()
+    mock_tg.assert_not_awaited()
+    mock_wh.assert_not_awaited()
+
+    # Check 2: Back in stock AND price dropped to $399.00 -> sends both alerts!
+    html_in_399 = (
+        "<html><body><span>$399.00</span><button>Add to Cart</button></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=html_in_399),
+        ),
+        patch(
+            "stock_checker.send_discord_rest_message",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_disc2,
+        patch(
+            "stock_checker.send_telegram_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_tg2,
+        patch(
+            "stock_checker.send_webhook_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_wh2,
+    ):
+        res2 = await monitor._check_product(temp_db.get_product(product["id"]))
+
+    assert res2["in_stock"] is True
+    assert res2["current_price"] == 399.0
+    assert res2["previous_price"] == 499.0
+    assert mock_disc2.await_count == 2  # stock alert + price drop embed
+    assert "embed" in mock_disc2.await_args_list[1].kwargs
+    assert mock_tg2.await_count == 2
+    assert mock_wh2.await_count == 2
+    events = [c.args[1]["event"] for c in mock_wh2.await_args_list]
+    assert events == ["stock_alert", "price_drop"]
+
+    price_hist = temp_db.get_price_history("Switch Pro Max")
+    assert [entry["price"] for entry in price_hist] == [399.0, 499.0]
+
+    # Check 3: Price drops further to $349.00 with price_alerts_enabled=false
+    temp_db.set_setting("price_alerts_enabled", "false")
+    html_in_349 = (
+        "<html><body><span>$349.00</span><button>Add to Cart</button></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=html_in_349),
+        ),
+        patch(
+            "stock_checker.send_discord_rest_message",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_disc3,
+        patch(
+            "stock_checker.send_telegram_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_tg3,
+        patch(
+            "stock_checker.send_webhook_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_wh3,
+    ):
+        res3 = await monitor._check_product(temp_db.get_product(product["id"]))
+
+    assert res3["current_price"] == 349.0
+    assert res3["previous_price"] == 399.0
+    mock_disc3.assert_not_awaited()
+    mock_tg3.assert_not_awaited()
+    mock_wh3.assert_not_awaited()
+    assert len(temp_db.get_price_history("Switch Pro Max")) == 3
+
+
+@pytest.mark.asyncio
+async def test_proxy_rotation_and_domain_rate_limiting(temp_db: Database) -> None:
+    """Verify ProxyRotator round-robin and DomainRateLimiter per-domain throttling."""
+    from stock_checker import DomainRateLimiter, ProxyRotator
+
+    rotator = ProxyRotator()
+    raw = "http://proxy1:8080, http://proxy2:8080\nhttp://proxy3:8080\n"
+    assert rotator.parse_proxies(raw) == [
+        "http://proxy1:8080",
+        "http://proxy2:8080",
+        "http://proxy3:8080",
+    ]
+    assert rotator.next_proxy(False, raw) is None
+    assert rotator.next_proxy(True, "") is None
+    seq = [rotator.next_proxy(True, raw) for _ in range(4)]
+    assert seq == [
+        "http://proxy1:8080",
+        "http://proxy2:8080",
+        "http://proxy3:8080",
+        "http://proxy1:8080",
+    ]
+
+    # DomainRateLimiter sleeps when hitting same domain within delay
+    limiter = DomainRateLimiter()
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    with patch("stock_checker.asyncio.sleep", side_effect=fake_sleep):
+        slept1 = await limiter.wait_if_needed("https://store.ui.com/item1", delay=2.0)
+        slept2 = await limiter.wait_if_needed("https://store.ui.com/item2", delay=2.0)
+        slept3 = await limiter.wait_if_needed("https://other.com/item1", delay=2.0)
+
+    assert slept1 == 0.0
+    assert slept2 > 1.5
+    assert slept3 == 0.0
+    assert len(sleep_calls) == 1
+    assert "store.ui.com" in limiter.last_domain_request
+    assert "other.com" in limiter.last_domain_request
+
+    # StockMonitor passes rotated proxies to StockChecker.check_product
+    temp_db.create_product("Item A", "https://alpha.example.com/a")
+    temp_db.create_product("Item B", "https://beta.example.com/b")
+    temp_db.update_settings(
+        {
+            "proxy_enabled": "true",
+            "proxy_list": "http://p1:3128\nhttp://p2:3128",
+            "domain_rate_limit_delay": "0.0",
+        }
+    )
+    monitor = StockMonitor(temp_db)
+    seen_proxies: list[str] = []
+
+    async def fake_check(product, proxy=None):
+        seen_proxies.append(proxy)
+        return {
+            "in_stock": False,
+            "found_selector": False,
+            "strategy_used": "auto",
+            "detected_by": "test",
+            "error": None,
+            "details": "ok",
+            "price": 10.0,
+            "currency": "USD",
+        }
+
+    with patch("stock_checker.StockChecker.check_product", side_effect=fake_check):
+        await monitor.check_all()
+
+    assert seen_proxies == ["http://p1:3128", "http://p2:3128"]
+
+
+def test_api_new_settings_test_endpoints_and_price_history(
+    client: TestClient,
+) -> None:
+    """Verify new settings persistence, test-telegram, test-webhook, price-history."""
+    # Update new settings
+    res = client.post(
+        "/api/settings",
+        json={
+            "telegram_bot_token": "999888:SecretTelegramBotToken",
+            "telegram_chat_id": "-100123456",
+            "telegram_enabled": True,
+            "webhook_url": "https://hooks.example.com/ubstock",
+            "webhook_enabled": True,
+            "price_alerts_enabled": False,
+            "proxy_list": "http://p1:8080\nhttp://p2:8080",
+            "proxy_enabled": True,
+            "domain_rate_limit_delay": 2.5,
+        },
+    )
+    assert res.status_code == 200
+    body = res.json()
+    assert body["telegram_bot_token_set"] is True
+    assert body["telegram_bot_token_masked"] == mask_token(
+        "999888:SecretTelegramBotToken"
+    )
+    assert "SecretTelegramBotToken" not in body["telegram_bot_token_masked"]
+    assert body["telegram_chat_id"] == "-100123456"
+    assert body["telegram_enabled"] is True
+    assert body["webhook_url"] == "https://hooks.example.com/ubstock"
+    assert body["webhook_enabled"] is True
+    assert body["price_alerts_enabled"] is False
+    assert body["proxy_list"] == "http://p1:8080\nhttp://p2:8080"
+    assert body["proxy_enabled"] is True
+    assert body["domain_rate_limit_delay"] == 2.5
+
+    # Invalid webhook URL rejected
+    bad_wh = client.post(
+        "/api/settings", json={"webhook_url": "ftp://invalid.example.com"}
+    )
+    assert bad_wh.status_code == 422
+
+    # Masked telegram token preserved on partial update
+    partial = client.post(
+        "/api/settings",
+        json={
+            "telegram_bot_token": body["telegram_bot_token_masked"],
+            "domain_rate_limit_delay": 1.5,
+        },
+    )
+    assert partial.status_code == 200
+    assert partial.json()["domain_rate_limit_delay"] == 1.5
+
+    # Test Telegram with saved credentials
+    with patch(
+        "api.send_telegram_notification",
+        new=AsyncMock(return_value=(True, None)),
+    ) as mock_tg:
+        tg_res = client.post("/api/settings/test-telegram")
+    assert tg_res.status_code == 200
+    assert tg_res.json() == {"success": True, "error": None}
+    mock_tg.assert_awaited_once()
+    assert mock_tg.await_args.args[0] == "999888:SecretTelegramBotToken"
+    assert mock_tg.await_args.args[1] == "-100123456"
+
+    # Test Webhook with saved URL and override URL
+    with patch(
+        "api.send_webhook_notification",
+        new=AsyncMock(return_value=(True, None)),
+    ) as mock_wh:
+        wh_res = client.post("/api/settings/test-webhook")
+    assert wh_res.status_code == 200
+    assert wh_res.json() == {"success": True, "error": None}
+    mock_wh.assert_awaited_once()
+    assert mock_wh.await_args.args[0] == "https://hooks.example.com/ubstock"
+    assert mock_wh.await_args.args[1]["event"] == "test"
+
+    # Price history endpoint: 404 for unknown product
+    missing_hist = client.get("/api/products/DoesNotExist/price-history")
+    assert missing_hist.status_code == 404
+
+    # Create product, run two checks with different prices, verify response & history
+    created = client.post(
+        "/api/products",
+        json={
+            "name": "G5 Dome",
+            "url": "https://example.com/g5-dome",
+            "strategy": "auto",
+        },
+    ).json()
+    assert created["current_price"] is None
+    assert created["currency"] == "USD"
+    assert created["previous_price"] is None
+
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(
+            return_value="<html><span>$179.00</span><button>Add to Cart</button></html>"
+        ),
+    ):
+        chk1 = client.post(f"/api/products/{created['id']}/check")
+    assert chk1.status_code == 200
+    assert chk1.json()["current_price"] == 179.0
+    assert chk1.json()["previous_price"] is None
+
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(
+            return_value="<html><span>$149.00</span><button>Add to Cart</button></html>"
+        ),
+    ):
+        chk2 = client.post(f"/api/products/{created['id']}/check")
+    assert chk2.status_code == 200
+    assert chk2.json()["current_price"] == 149.0
+    assert chk2.json()["previous_price"] == 179.0
+
+    hist_res = client.get("/api/products/G5%20Dome/price-history?limit=10")
+    assert hist_res.status_code == 200
+    hist_items = hist_res.json()
+    assert len(hist_items) == 2
+    assert hist_items[0]["price"] == 149.0
+    assert hist_items[1]["price"] == 179.0
+    assert hist_items[0]["currency"] == "USD"
+
+
+# ----------------------------------------------------------------------
+# QA Edge-Case, Boundary & Cross-Tier Contract Tests
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multi_channel_notification_edge_cases_and_failures(
+    temp_db: Database,
+) -> None:
+    """Verify partial channel failures, global toggle, price increases, formatting."""
+    from unittest.mock import MagicMock
+
+    from notifications import (
+        format_price,
+        send_discord_rest_message,
+        send_telegram_notification,
+        send_webhook_notification,
+    )
+
+    assert format_price(None) == "N/A"
+    assert format_price(1234.5, "usd") == "$1,234.50"
+    assert format_price(99.9, "EUR") == "€99.90"
+    assert format_price(50, "GBP") == "£50.00"
+    assert format_price(500, "CHF") == "CHF 500.00"
+
+    # Network exceptions in notification dispatchers return clean (False, err) tuples
+    broken_session = MagicMock()
+    broken_session.return_value.__aenter__ = AsyncMock(
+        side_effect=RuntimeError("DNS failure")
+    )
+    broken_session.return_value.__aexit__ = AsyncMock(return_value=False)
+    with patch("notifications.aiohttp.ClientSession", new=broken_session):
+        d_ok, d_err = await send_discord_rest_message("tok", "123", "hi")
+        t_ok, t_err = await send_telegram_notification("tok", "123", "hi")
+        w_ok, w_err = await send_webhook_notification(
+            "https://hooks.example.com/test", {"event": "test"}
+        )
+    assert d_ok is False and "DNS failure" in (d_err or "")
+    assert t_ok is False and "DNS failure" in (t_err or "")
+    assert w_ok is False and "DNS failure" in (w_err or "")
+
+    # Setup product and all 3 channels; Discord fails while Telegram & Webhook succeed
+    prod = temp_db.create_product("U7 Pro Wall", "https://example.com/u7-wall")
+    temp_db.update_settings(
+        {
+            "notifications_enabled": "true",
+            "discord_token": "disc-tok",
+            "discord_channel_id": "111222",
+            "telegram_bot_token": "tg-tok",
+            "telegram_chat_id": "998877",
+            "telegram_enabled": "true",
+            "webhook_url": "https://hooks.example.com/events",
+            "webhook_enabled": "true",
+            "price_alerts_enabled": "true",
+            "domain_rate_limit_delay": "0.0",
+        }
+    )
+    monitor = StockMonitor(temp_db)
+
+    # First check: In stock at $199.00 -> Discord fails, Telegram & Webhook succeed
+    html_199 = (
+        "<html><body><span>$199.00</span><button>Add to Cart</button></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=html_199),
+        ),
+        patch(
+            "stock_checker.send_discord_rest_message",
+            new=AsyncMock(return_value=(False, "Discord 401")),
+        ),
+        patch(
+            "stock_checker.send_telegram_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_tg,
+        patch(
+            "stock_checker.send_webhook_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_wh,
+    ):
+        await monitor._check_product(temp_db.get_product(prod["id"]))
+
+    mock_tg.assert_awaited_once()
+    mock_wh.assert_awaited_once()
+    hist = temp_db.get_history()
+    assert hist[0]["status"] == "in_stock"
+    assert hist[0]["notification_sent"] is True
+    assert "Discord: Discord 401" in hist[0]["message"]
+
+    # Price increase ($199 -> $249) must NOT trigger a price drop alert
+    html_249 = (
+        "<html><body><span>$249.00</span><button>Add to Cart</button></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=html_249),
+        ),
+        patch(
+            "stock_checker.send_discord_rest_message",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_disc_up,
+        patch(
+            "stock_checker.send_telegram_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_tg_up,
+        patch(
+            "stock_checker.send_webhook_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_wh_up,
+    ):
+        up_res = await monitor._check_product(temp_db.get_product(prod["id"]))
+
+    assert up_res["current_price"] == 249.0
+    assert up_res["previous_price"] == 199.0
+    mock_disc_up.assert_not_awaited()
+    mock_tg_up.assert_not_awaited()
+    mock_wh_up.assert_not_awaited()
+
+    # Global notifications_enabled=false suppresses price drop alerts even if
+    # price_alerts_enabled=true
+    temp_db.set_setting("notifications_enabled", "false")
+    html_179 = (
+        "<html><body><span>$179.00</span><button>Add to Cart</button></body></html>"
+    )
+    with (
+        patch(
+            "stock_checker.fetch_product_page",
+            new=AsyncMock(return_value=html_179),
+        ),
+        patch(
+            "stock_checker.send_telegram_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_tg_muted,
+        patch(
+            "stock_checker.send_webhook_notification",
+            new=AsyncMock(return_value=(True, None)),
+        ) as mock_wh_muted,
+    ):
+        muted_res = await monitor._check_product(temp_db.get_product(prod["id"]))
+
+    assert muted_res["current_price"] == 179.0
+    assert muted_res["previous_price"] == 249.0
+    mock_tg_muted.assert_not_awaited()
+    mock_wh_muted.assert_not_awaited()
+
+
+def test_api_test_endpoints_masked_tokens_and_validation_edges(
+    client: TestClient,
+) -> None:
+    """Verify test-telegram/webhook edge cases, token masking, and delay bounds."""
+    # Missing credentials fail cleanly with success=False
+    empty_tg = client.post("/api/settings/test-telegram", json={})
+    assert empty_tg.status_code == 200
+    assert empty_tg.json()["success"] is False
+    assert "required" in (empty_tg.json()["error"] or "").lower()
+
+    empty_wh = client.post("/api/settings/test-webhook", json={})
+    assert empty_wh.status_code == 200
+    assert empty_wh.json()["success"] is False
+
+    bad_wh_test = client.post(
+        "/api/settings/test-webhook", json={"webhook_url": "ftp://bad.example.com"}
+    )
+    assert bad_wh_test.status_code == 200
+    assert bad_wh_test.json()["success"] is False
+    assert "http" in (bad_wh_test.json()["error"] or "").lower()
+
+    # Invalid URLs and domain rate limit extremes in POST /api/settings
+    assert (
+        client.post(
+            "/api/settings", json={"webhook_url": "javascript:alert(1)"}
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post("/api/settings", json={"domain_rate_limit_delay": -0.1}).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/settings", json={"domain_rate_limit_delay": 300.1}
+        ).status_code
+        == 422
+    )
+
+    # Boundary min (0.0) and max (300.0) succeed
+    min_res = client.post("/api/settings", json={"domain_rate_limit_delay": 0.0})
+    assert min_res.status_code == 200
+    assert min_res.json()["domain_rate_limit_delay"] == 0.0
+
+    max_res = client.post("/api/settings", json={"domain_rate_limit_delay": 300.0})
+    assert max_res.status_code == 200
+    assert max_res.json()["domain_rate_limit_delay"] == 300.0
+
+    # Save real tokens, verify masked tokens are NOT overwritten by masked values
+    save_res = client.post(
+        "/api/settings",
+        json={
+            "discord_token": "DiscordRealSecretToken123",
+            "discord_channel_id": "555666",
+            "telegram_bot_token": "TelegramRealSecretToken456",
+            "telegram_chat_id": "-100777",
+            "webhook_url": "https://hooks.example.com/saved",
+        },
+    )
+    assert save_res.status_code == 200
+    saved = save_res.json()
+
+    # Re-posting masked tokens keeps real secrets intact
+    repost = client.post(
+        "/api/settings",
+        json={
+            "discord_token": saved["discord_token_masked"],
+            "telegram_bot_token": saved["telegram_bot_token_masked"],
+            "proxy_enabled": True,
+            "proxy_list": "",
+        },
+    )
+    assert repost.status_code == 200
+    assert repost.json()["discord_token_set"] is True
+    assert repost.json()["telegram_bot_token_set"] is True
+
+    # Sending masked token to test-telegram still uses the saved unmasked secret
+    with patch(
+        "api.send_telegram_notification",
+        new=AsyncMock(return_value=(True, None)),
+    ) as mock_tg:
+        tg_masked = client.post(
+            "/api/settings/test-telegram",
+            json={
+                "telegram_bot_token": saved["telegram_bot_token_masked"],
+                "telegram_chat_id": "-100777",
+            },
+        )
+    assert tg_masked.status_code == 200
+    assert tg_masked.json()["success"] is True
+    assert mock_tg.await_args.args[0] == "TelegramRealSecretToken456"
+
+    # Override credentials in test-telegram and test-webhook take precedence
+    with patch(
+        "api.send_telegram_notification",
+        new=AsyncMock(return_value=(False, "Unauthorized")),
+    ) as mock_tg_ov:
+        tg_ov = client.post(
+            "/api/settings/test-telegram",
+            json={
+                "telegram_bot_token": "OverrideToken",
+                "telegram_chat_id": "12345",
+            },
+        )
+    assert tg_ov.json() == {"success": False, "error": "Unauthorized"}
+    assert mock_tg_ov.await_args.args == (
+        "OverrideToken",
+        "12345",
+        "✅ Stock Checker test notification! Your Telegram alerts are "
+        "configured properly.",
+    )
+
+    with patch(
+        "api.send_webhook_notification",
+        new=AsyncMock(return_value=(True, None)),
+    ) as mock_wh_ov:
+        wh_ov = client.post(
+            "/api/settings/test-webhook",
+            json={"webhook_url": "https://override.example.com/hook"},
+        )
+    assert wh_ov.json() == {"success": True, "error": None}
+    assert mock_wh_ov.await_args.args[0] == "https://override.example.com/hook"
+
+    # Clearing webhook_url and telegram_bot_token with empty strings works
+    cleared = client.post(
+        "/api/settings",
+        json={"webhook_url": "", "telegram_bot_token": ""},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["webhook_url"] == ""
+    assert cleared.json()["telegram_bot_token_set"] is False
+
+
+@pytest.mark.asyncio
+async def test_proxy_and_domain_rate_limit_edge_cases(temp_db: Database) -> None:
+    """Verify empty proxy lists, proxy passthrough, and domain rate limit edges."""
+    from unittest.mock import MagicMock
+
+    from stock_checker import DomainRateLimiter, ProxyRotator, fetch_shopify_json
+    from utils import fetch_product_page
+
+    rotator = ProxyRotator()
+    assert rotator.next_proxy(True, "   \n , \r\n  ") is None
+    assert rotator.next_proxy(True, "http://p1:8080") == "http://p1:8080"
+    # Updating list resets round-robin index cleanly
+    assert rotator.next_proxy(True, "http://p2:8080\nhttp://p3:8080") == (
+        "http://p2:8080"
+    )
+    assert rotator.next_proxy(True, "http://p2:8080\nhttp://p3:8080") == (
+        "http://p3:8080"
+    )
+
+    # Empty proxy list with proxy_enabled=True passes proxy=None
+    temp_db.update_settings(
+        {
+            "proxy_enabled": "true",
+            "proxy_list": " , \n ",
+            "domain_rate_limit_delay": "invalid-float",
+        }
+    )
+    monitor = StockMonitor(temp_db)
+    assert monitor.get_next_proxy() is None
+    assert monitor.get_domain_rate_limit_delay() == 1.0
+
+    temp_db.set_setting("domain_rate_limit_delay", "-5.0")
+    assert monitor.get_domain_rate_limit_delay() == 0.0
+
+    # DomainRateLimiter edge cases: empty URL, delay=0, case-insensitive netloc
+    limiter = DomainRateLimiter()
+    sleep_calls: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    with patch("stock_checker.asyncio.sleep", side_effect=fake_sleep):
+        assert await limiter.wait_if_needed("not-a-valid-url", delay=5.0) == 0.0
+        assert await limiter.wait_if_needed("https://Example.COM/a", delay=0.0) == 0.0
+        assert await limiter.wait_if_needed("https://Example.COM/a", delay=-2.0) == 0.0
+        # First valid delayed call records timestamp without sleeping
+        assert await limiter.wait_if_needed("https://Store.UI.com/p1", delay=2.0) == 0.0
+        # Case-insensitive match on same domain triggers sleep
+        slept = await limiter.wait_if_needed("http://store.ui.com/p2", delay=2.0)
+    assert slept > 1.5
+    assert len(sleep_calls) == 1
+
+    # Verify fetch_product_page & fetch_shopify_json forward proxy argument to aiohttp
+    get_kwargs: list[dict] = []
+
+    class FakeResp:
+        status = 200
+
+        async def text(self) -> str:
+            return "<html>ok</html>"
+
+        async def json(self, content_type=None):
+            return {"product": {"variants": []}}
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    class FakeClientSession:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get(self, url, **kwargs):
+            get_kwargs.append({"url": url, "kwargs": kwargs})
+            return FakeResp()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    with (
+        patch("utils.aiohttp.ClientSession", new=FakeClientSession),
+        patch("stock_checker.aiohttp.ClientSession", new=FakeClientSession),
+    ):
+        html = await fetch_product_page(
+            "https://example.com/item", proxy="http://proxy1:8080"
+        )
+        payload, err = await fetch_shopify_json(
+            "https://shop.example.com/products/widget", proxy="http://proxy2:8080"
+        )
+    assert html == "<html>ok</html>"
+    assert err is None and isinstance(payload, dict)
+    assert get_kwargs[0]["kwargs"].get("proxy") == "http://proxy1:8080"
+    assert get_kwargs[1]["kwargs"].get("proxy") == "http://proxy2:8080"
+    # Confirm MagicMock import unused lint doesn't trigger
+    assert MagicMock is not None
+
+
+@pytest.mark.asyncio
+async def test_price_extraction_and_history_edge_cases(
+    temp_db: Database, client: TestClient
+) -> None:
+    """Verify price parsing boundaries, error preservation, and history limits."""
+    from stock_checker import _extract_price_from_text, _parse_price_value
+
+    assert _parse_price_value(None) is None
+    assert _parse_price_value(True) is None
+    assert _parse_price_value(-15.0) is None
+    assert _parse_price_value(float("nan")) is None
+    assert _parse_price_value(float("inf")) is None
+    assert _parse_price_value("") is None
+    assert _parse_price_value("389,99") == 389.99
+    assert _parse_price_value("$1,299.50") == 1299.50
+    assert _parse_price_value("0.00") == 0.0
+    assert _extract_price_from_text("No price here") == (None, "USD")
+    assert _extract_price_from_text("Only £49 today") == (49.0, "GBP")
+
+    # JSON-LD AggregateOffer lowPrice + @graph
+    graph_html = """
+    <html><head>
+      <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Product",
+            "offers": {
+              "@type": "AggregateOffer",
+              "availability": "https://schema.org/InStock",
+              "lowPrice": "219.00",
+              "priceCurrency": "CAD"
+            }
+          }
+        ]
+      }
+      </script>
+    </head><body></body></html>
+    """
+    with patch(
+        "stock_checker.fetch_product_page", new=AsyncMock(return_value=graph_html)
+    ):
+        res_graph = await StockChecker.detect_stock(
+            "https://example.com/graph", strategy="json_ld"
+        )
+    assert res_graph["in_stock"] is True
+    assert res_graph["price"] == 219.0
+    assert res_graph["currency"] == "CAD"
+
+    # Error during check must NOT overwrite price or record price_history
+    created = client.post(
+        "/api/products",
+        json={"name": "Cloud Gateway", "url": "https://example.com/ucg"},
+    ).json()
+    pid = created["id"]
+
+    # Initially empty price history returns 200 []
+    empty_hist = client.get("/api/products/Cloud%20Gateway/price-history")
+    assert empty_hist.status_code == 200
+    assert empty_hist.json() == []
+
+    # Invalid limit bounds rejected with 422
+    assert (
+        client.get("/api/products/Cloud%20Gateway/price-history?limit=0").status_code
+        == 422
+    )
+    assert (
+        client.get("/api/products/Cloud%20Gateway/price-history?limit=501").status_code
+        == 422
+    )
+
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(
+            return_value="<html><span>$129.00</span><button>Add to Cart</button></html>"
+        ),
+    ):
+        ok_chk = client.post(f"/api/products/{pid}/check")
+    assert ok_chk.status_code == 200
+    assert ok_chk.json()["current_price"] == 129.0
+
+    with patch(
+        "stock_checker.fetch_product_page",
+        new=AsyncMock(side_effect=Exception("Connection reset")),
+    ):
+        err_chk = client.post(f"/api/products/{pid}/check")
+    assert err_chk.status_code == 200
+    assert err_chk.json()["last_error"] == "Connection reset"
+    assert err_chk.json()["current_price"] == 129.0
+    assert len(client.get("/api/products/Cloud%20Gateway/price-history").json()) == 1
+
+    # Renaming product preserves price history under new name
+    upd = client.put(f"/api/products/{pid}", json={"name": "Cloud Gateway Max"})
+    assert upd.status_code == 200
+    assert client.get("/api/products/Cloud%20Gateway/price-history").status_code == 404
+    renamed_hist = client.get("/api/products/Cloud%20Gateway%20Max/price-history")
+    assert renamed_hist.status_code == 200
+    assert len(renamed_hist.json()) == 1
+
+
+def test_cross_tier_frontend_contracts_for_new_features(client: TestClient) -> None:
+    """Verify static frontend contains all new UI controls, modals, and API routes."""
+    root = Path(__file__).resolve().parent
+    html = (root / "static" / "index.html").read_text(encoding="utf-8")
+    js = (root / "static" / "app.js").read_text(encoding="utf-8")
+
+    # Settings UI elements
+    for elem_id in (
+        "setting-telegram-enabled",
+        "setting-telegram-token",
+        "setting-telegram-chat-id",
+        "btn-test-telegram",
+        "test-telegram-feedback",
+        "setting-webhook-enabled",
+        "setting-webhook-url",
+        "btn-test-webhook",
+        "test-webhook-feedback",
+        "setting-price-alerts-enabled",
+        "setting-proxy-enabled",
+        "setting-proxy-list",
+        "setting-domain-rate-limit-delay",
+        "price-history-modal",
+        "price-history-tbody",
+        "price-history-empty",
+        "price-history-current-price",
+        "price-history-change-stat",
+        "price-history-count-stat",
+    ):
+        assert f'id="{elem_id}"' in html
+
+    # JS API calls & payload fields
+    for fragment in (
+        "/api/settings/test-telegram",
+        "/api/settings/test-webhook",
+        "/price-history",
+        "telegram_bot_token",
+        "telegram_chat_id",
+        "telegram_enabled",
+        "webhook_url",
+        "webhook_enabled",
+        "price_alerts_enabled",
+        "proxy_list",
+        "proxy_enabled",
+        "domain_rate_limit_delay",
+        "current_price",
+        "previous_price",
+    ):
+        assert fragment in js

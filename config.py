@@ -15,7 +15,7 @@ def _get_env_int(name: str, default: int) -> int:
 
 
 # Application metadata
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 
 # Optional environment variables (used to seed DB settings on first run)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN", "").strip()

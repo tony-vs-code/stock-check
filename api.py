@@ -13,11 +13,16 @@ from config import APP_VERSION, DEFAULT_SELECTOR, STATIC_DIR
 from database import Database, DuplicateProductError
 from discord_client import DiscordManager
 from log_manager import LogManager
+from notifications import (
+    build_webhook_payload,
+    send_discord_rest_message,
+    send_telegram_notification,
+    send_webhook_notification,
+)
 from stock_checker import (
     VALID_STRATEGIES,
     StockChecker,
     StockMonitor,
-    send_discord_rest_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +74,9 @@ class ProductResponse(BaseModel):
     strategy: str = "auto"
     strategy_details: Optional[str] = None
     in_stock: bool
+    current_price: Optional[float] = None
+    currency: str = "USD"
+    previous_price: Optional[float] = None
     last_checked: Optional[str] = None
     last_status_change: Optional[str] = None
     last_error: Optional[str] = None
@@ -173,6 +181,17 @@ class TestSelectorResponse(BaseModel):
     detected_by: str
     error: Optional[str] = None
     details: Optional[str] = None
+    price: Optional[float] = None
+    currency: str = "USD"
+
+
+class PriceHistoryEntryResponse(BaseModel):
+    id: int
+    product_id: Optional[int] = None
+    product_name: str
+    price: float
+    currency: str = "USD"
+    recorded_at: Optional[str] = None
 
 
 class CheckAllResponse(BaseModel):
@@ -198,6 +217,16 @@ class SettingsResponse(BaseModel):
     discord_channel_id: str
     check_stock_interval: int
     notifications_enabled: bool
+    telegram_bot_token_set: bool
+    telegram_bot_token_masked: str
+    telegram_chat_id: str
+    telegram_enabled: bool
+    webhook_url: str
+    webhook_enabled: bool
+    price_alerts_enabled: bool
+    proxy_list: str
+    proxy_enabled: bool
+    domain_rate_limit_delay: float
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -205,11 +234,39 @@ class SettingsUpdateRequest(BaseModel):
     discord_channel_id: Optional[str] = None
     check_stock_interval: Optional[int] = Field(default=None, ge=1, le=86400)
     notifications_enabled: Optional[bool] = None
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    telegram_enabled: Optional[bool] = None
+    webhook_url: Optional[str] = Field(default=None, max_length=2048)
+    webhook_enabled: Optional[bool] = None
+    price_alerts_enabled: Optional[bool] = None
+    proxy_list: Optional[str] = Field(default=None, max_length=20000)
+    proxy_enabled: Optional[bool] = None
+    domain_rate_limit_delay: Optional[float] = Field(default=None, ge=0.0, le=300.0)
+
+    @field_validator("webhook_url")
+    @classmethod
+    def validate_webhook_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = v.strip()
+        if not cleaned:
+            return ""
+        return _validate_http_url(cleaned)
 
 
 class TestDiscordRequest(BaseModel):
     discord_token: Optional[str] = None
     discord_channel_id: Optional[str] = None
+
+
+class TestTelegramRequest(BaseModel):
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+
+
+class TestWebhookRequest(BaseModel):
+    webhook_url: Optional[str] = None
 
 
 class TestDiscordResponse(BaseModel):
@@ -223,13 +280,18 @@ class TestDiscordResponse(BaseModel):
 
 
 def mask_token(token: str) -> str:
-    """Return a masked representation of a Discord bot token."""
+    """Return a masked representation of a secret token."""
     cleaned = token.strip()
     if not cleaned:
         return ""
     if len(cleaned) <= 8:
         return "••••" + cleaned[-2:]
     return f"{cleaned[:4]}...{cleaned[-4:]}"
+
+
+def _parse_bool_setting(db: Database, key: str, default: str = "false") -> bool:
+    raw = (db.get_setting(key, default) or default).strip().lower()
+    return raw in ("true", "1", "yes", "on")
 
 
 def _build_settings_response(db: Database) -> SettingsResponse:
@@ -240,8 +302,23 @@ def _build_settings_response(db: Database) -> SettingsResponse:
         interval = max(1, int(raw_interval))
     except ValueError:
         interval = 15
-    raw_enabled = (db.get_setting("notifications_enabled", "true") or "true").lower()
-    notifications_enabled = raw_enabled in ("true", "1", "yes", "on")
+    notifications_enabled = _parse_bool_setting(db, "notifications_enabled", "true")
+
+    tg_token = (db.get_setting("telegram_bot_token", "") or "").strip()
+    tg_chat_id = (db.get_setting("telegram_chat_id", "") or "").strip()
+    tg_enabled = _parse_bool_setting(db, "telegram_enabled", "false")
+
+    webhook_url = (db.get_setting("webhook_url", "") or "").strip()
+    webhook_enabled = _parse_bool_setting(db, "webhook_enabled", "false")
+    price_alerts_enabled = _parse_bool_setting(db, "price_alerts_enabled", "true")
+
+    proxy_list = db.get_setting("proxy_list", "") or ""
+    proxy_enabled = _parse_bool_setting(db, "proxy_enabled", "false")
+    raw_delay = db.get_setting("domain_rate_limit_delay", "1.0") or "1.0"
+    try:
+        domain_delay = max(0.0, float(raw_delay))
+    except ValueError:
+        domain_delay = 1.0
 
     return SettingsResponse(
         discord_token_set=bool(token),
@@ -249,6 +326,16 @@ def _build_settings_response(db: Database) -> SettingsResponse:
         discord_channel_id=channel_id,
         check_stock_interval=interval,
         notifications_enabled=notifications_enabled,
+        telegram_bot_token_set=bool(tg_token),
+        telegram_bot_token_masked=mask_token(tg_token),
+        telegram_chat_id=tg_chat_id,
+        telegram_enabled=tg_enabled,
+        webhook_url=webhook_url,
+        webhook_enabled=webhook_enabled,
+        price_alerts_enabled=price_alerts_enabled,
+        proxy_list=proxy_list,
+        proxy_enabled=proxy_enabled,
+        domain_rate_limit_delay=domain_delay,
     )
 
 
@@ -455,6 +542,24 @@ def create_app(
             )
         return updated
 
+    @application.get(
+        "/api/products/{name:path}/price-history",
+        response_model=list[PriceHistoryEntryResponse],
+    )
+    async def get_product_price_history(
+        name: str,
+        request: Request,
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> list[dict[str, Any]]:
+        """Return historical price observations for a named product."""
+        active_db = _get_db(request)
+        if active_db.get_product_by_name(name) is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product '{name}' not found.",
+            )
+        return active_db.get_price_history(name, limit=limit)
+
     @application.post("/api/check-all", response_model=CheckAllResponse)
     async def check_all_products(request: Request) -> dict[str, Any]:
         """Trigger an immediate stock check for all monitored products."""
@@ -525,6 +630,42 @@ def create_app(
                 "true" if payload.notifications_enabled else "false"
             )
 
+        if payload.telegram_bot_token is not None:
+            existing_tg = (
+                active_db.get_setting("telegram_bot_token", "") or ""
+            ).strip()
+            cleaned_tg = payload.telegram_bot_token.strip()
+            if cleaned_tg != mask_token(existing_tg):
+                updates["telegram_bot_token"] = cleaned_tg
+
+        if payload.telegram_chat_id is not None:
+            updates["telegram_chat_id"] = payload.telegram_chat_id.strip()
+
+        if payload.telegram_enabled is not None:
+            updates["telegram_enabled"] = (
+                "true" if payload.telegram_enabled else "false"
+            )
+
+        if payload.webhook_url is not None:
+            updates["webhook_url"] = payload.webhook_url.strip()
+
+        if payload.webhook_enabled is not None:
+            updates["webhook_enabled"] = "true" if payload.webhook_enabled else "false"
+
+        if payload.price_alerts_enabled is not None:
+            updates["price_alerts_enabled"] = (
+                "true" if payload.price_alerts_enabled else "false"
+            )
+
+        if payload.proxy_list is not None:
+            updates["proxy_list"] = payload.proxy_list
+
+        if payload.proxy_enabled is not None:
+            updates["proxy_enabled"] = "true" if payload.proxy_enabled else "false"
+
+        if payload.domain_rate_limit_delay is not None:
+            updates["domain_rate_limit_delay"] = str(payload.domain_rate_limit_delay)
+
         active_db.update_settings(updates)
         active_monitor.notify_settings_changed()
 
@@ -568,6 +709,78 @@ def create_app(
             "✅ **Stock Checker test notification!** Your Discord alerts are "
             "configured properly.",
         )
+        return TestDiscordResponse(success=ok, error=err)
+
+    @application.post("/api/settings/test-telegram", response_model=TestDiscordResponse)
+    async def test_telegram(
+        request: Request,
+        payload: Optional[TestTelegramRequest] = Body(default=None),
+    ) -> TestDiscordResponse:
+        """Send a test Telegram notification using provided or saved credentials."""
+        active_db = _get_db(request)
+        saved_token = (active_db.get_setting("telegram_bot_token", "") or "").strip()
+        saved_chat_id = (active_db.get_setting("telegram_chat_id", "") or "").strip()
+
+        token = saved_token
+        chat_id = saved_chat_id
+
+        if payload is not None:
+            if payload.telegram_bot_token is not None:
+                provided_token = payload.telegram_bot_token.strip()
+                if provided_token and provided_token != mask_token(saved_token):
+                    token = provided_token
+            if payload.telegram_chat_id is not None:
+                provided_chat_id = payload.telegram_chat_id.strip()
+                if provided_chat_id:
+                    chat_id = provided_chat_id
+
+        if not token or not chat_id:
+            return TestDiscordResponse(
+                success=False,
+                error="Telegram bot token and chat ID are required.",
+            )
+
+        ok, err = await send_telegram_notification(
+            token,
+            chat_id,
+            "✅ Stock Checker test notification! Your Telegram alerts are "
+            "configured properly.",
+        )
+        return TestDiscordResponse(success=ok, error=err)
+
+    @application.post("/api/settings/test-webhook", response_model=TestDiscordResponse)
+    async def test_webhook(
+        request: Request,
+        payload: Optional[TestWebhookRequest] = Body(default=None),
+    ) -> TestDiscordResponse:
+        """Send a test JSON webhook notification using provided or saved URL."""
+        active_db = _get_db(request)
+        webhook_url = (active_db.get_setting("webhook_url", "") or "").strip()
+
+        if payload is not None and payload.webhook_url is not None:
+            provided_url = payload.webhook_url.strip()
+            if provided_url:
+                webhook_url = provided_url
+
+        if not (
+            webhook_url.startswith("http://") or webhook_url.startswith("https://")
+        ):
+            return TestDiscordResponse(
+                success=False,
+                error="Valid HTTP/HTTPS webhook URL is required.",
+            )
+
+        test_payload = build_webhook_payload(
+            event="test",
+            product="Stock Checker Test",
+            url="https://example.com",
+            status="test",
+            price=None,
+            message=(
+                "Stock Checker test notification! Your webhook is configured properly."
+            ),
+        )
+        ok, err = await send_webhook_notification(webhook_url, test_payload)
         return TestDiscordResponse(success=ok, error=err)
 
     # ------------------------------------------------------------------

@@ -1,6 +1,6 @@
 # Stock Checker (`ubstock`)
 
-**Stock Checker** (`v0.3.1`) is a self-contained, real-time inventory and product availability monitor featuring an **automatic Multi-Strategy Stock Detection Engine**, a modern **Web UI Dashboard**, **REST API**, **SQLite persistence**, **container-first Docker deployment**, and **optional Discord alerting & slash commands**.
+**Stock Checker** (`v0.4.0`) is a self-contained, real-time inventory and product availability monitor featuring an **automatic Multi-Strategy Stock Detection Engine**, **Price Tracking & Drop Alerts**, **Multi-Channel Notifications (Discord, Telegram, Webhooks)**, **Proxy Rotation & Per-Domain Rate Limiting**, a modern **Web UI Dashboard**, **REST API**, **SQLite persistence**, and **container-first Docker deployment**.
 
 It starts cleanly out of the box with **zero `.env` dependency**—and thanks to Auto-Detect, **you no longer need to hunt for CSS selectors** just to start tracking a product URL.
 
@@ -88,7 +88,7 @@ No `.env` file or pre-configuration is needed.
 4. **Verify container health**:
    ```bash
    curl -f http://localhost:8000/api/health
-   # {"status":"ok","version":"0.3.1"}
+   # {"status":"ok","version":"0.4.0"}
    ```
 
 #### Included `docker-compose.yml`
@@ -213,7 +213,7 @@ Interactive OpenAPI / Swagger documentation is also available at **`http://local
 
 | Method | Endpoint | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | Container healthcheck (`{"status": "ok", "version": "0.3.1"}`) |
+| `GET` | `/api/health` | Container healthcheck (`{"status": "ok", "version": "0.4.0"}`) |
 | `GET` | `/api/status` | Aggregate product counts, Discord connection status, interval & check state |
 | `GET` | `/api/products` | List all monitored products (including `strategy` and `strategy_details`) |
 | `POST` | `/api/products` | Add a new product (`name`, `url`, optional `strategy` defaulting to `"auto"`, optional `selector`) |
