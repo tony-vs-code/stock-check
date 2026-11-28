@@ -192,6 +192,30 @@
     return `${n}s`;
   }
 
+  function formatPrice(price, currency = "USD") {
+    if (price === null || price === undefined || price === "") {
+      return "";
+    }
+    const num = Number(price);
+    if (!Number.isFinite(num)) {
+      return "";
+    }
+    const code = String(currency || "USD").trim().toUpperCase();
+    const symbols = {
+      USD: "$",
+      EUR: "€",
+      GBP: "£",
+      JPY: "¥",
+      CAD: "CA$",
+      AUD: "A$",
+    };
+    const formatted = num.toFixed(2);
+    if (symbols[code]) {
+      return `${symbols[code]}${formatted}`;
+    }
+    return `${code} ${formatted}`;
+  }
+
   function setButtonLoading(buttonEl, labelEl, isLoading, loadingText, idleText) {
     if (!buttonEl) {
       return;
@@ -520,6 +544,49 @@
           ? `<div class="strategy-details-text" title="Live detection status: ${safeStrategyDetails}">${safeStrategyDetails}</div>`
           : "";
 
+        let priceRowMarkup = "";
+        if (product.current_price !== null && product.current_price !== undefined) {
+          const currPrice = Number(product.current_price);
+          const currency = product.currency || "USD";
+          const formattedCurr = escapeHtml(formatPrice(currPrice, currency));
+          let previousPriceMarkup = "";
+          let trendBadgeMarkup = "";
+
+          if (
+            product.previous_price !== null &&
+            product.previous_price !== undefined &&
+            Number(product.previous_price) !== currPrice
+          ) {
+            const prevPrice = Number(product.previous_price);
+            const formattedPrev = escapeHtml(formatPrice(prevPrice, currency));
+            previousPriceMarkup = `<span class="price-previous" title="Previous price">${formattedPrev}</span>`;
+
+            if (prevPrice > 0) {
+              const pctChange = ((currPrice - prevPrice) / prevPrice) * 100;
+              if (currPrice < prevPrice) {
+                trendBadgeMarkup = `<span class="price-trend price-trend--drop">▼ ${Math.abs(pctChange).toFixed(1)}% off</span>`;
+              } else {
+                trendBadgeMarkup = `<span class="price-trend price-trend--up">▲ +${Math.abs(pctChange).toFixed(1)}%</span>`;
+              }
+            }
+          }
+
+          priceRowMarkup = `
+            <div class="product-price-row">
+              <button
+                type="button"
+                class="price-badge js-view-price-history"
+                data-product-name="${safeName}"
+                data-product-id="${product.id}"
+                title="Click to view price history (${escapeHtml(currency)})"
+              >
+                <span class="price-badge-value">${formattedCurr}</span>
+              </button>
+              ${previousPriceMarkup}
+              ${trendBadgeMarkup}
+            </div>`;
+        }
+
         const lastCheckedRel = formatRelativeTime(product.last_checked);
         const lastCheckedExact = formatExactTime(product.last_checked);
         const statusChangeRel = product.last_status_change
@@ -556,6 +623,7 @@
             </div>
 
             <div class="product-meta">
+              ${priceRowMarkup}
               ${methodMarkup}
               ${strategyDetailsMarkup}
 
@@ -577,6 +645,15 @@
                 ${checkBtnContent}
               </button>
               <div class="product-actions-secondary">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost js-view-price-history"
+                  data-product-name="${safeName}"
+                  data-product-id="${product.id}"
+                  title="View price history"
+                >
+                  Price History
+                </button>
                 <button type="button" class="btn btn-sm btn-ghost js-edit-product" data-id="${product.id}">
                   Edit
                 </button>
@@ -626,6 +703,8 @@
           statusMarkup = `<span class="badge badge--in-stock"><span class="badge-dot"></span>In Stock</span>`;
         } else if (entry.status === "out_of_stock") {
           statusMarkup = `<span class="badge badge--out-of-stock"><span class="badge-dot"></span>Out of Stock</span>`;
+        } else if (entry.status === "price_drop") {
+          statusMarkup = `<span class="badge badge--price-drop"><span class="badge-dot"></span>Price Drop</span>`;
         } else if (entry.status === "error") {
           statusMarkup = `<span class="badge badge--error"><span class="badge-dot"></span>Error</span>`;
         }
@@ -666,6 +745,21 @@
     const tokenBadge = document.getElementById("settings-token-badge");
     const tokenHint = document.getElementById("setting-token-hint");
 
+    const tgEnabledCheckbox = document.getElementById("setting-telegram-enabled");
+    const tgTokenInput = document.getElementById("setting-telegram-token");
+    const tgTokenHint = document.getElementById("setting-telegram-token-hint");
+    const tgChatIdInput = document.getElementById("setting-telegram-chat-id");
+    const tgBadge = document.getElementById("settings-telegram-badge");
+
+    const webhookEnabledCheckbox = document.getElementById("setting-webhook-enabled");
+    const webhookUrlInput = document.getElementById("setting-webhook-url");
+    const webhookBadge = document.getElementById("settings-webhook-badge");
+
+    const priceAlertsCheckbox = document.getElementById("setting-price-alerts-enabled");
+    const proxyEnabledCheckbox = document.getElementById("setting-proxy-enabled");
+    const proxyListTextarea = document.getElementById("setting-proxy-list");
+    const domainDelayInput = document.getElementById("setting-domain-rate-limit-delay");
+
     if (tokenInput) {
       tokenInput.value = "";
       tokenInput.placeholder = st.discord_token_set
@@ -697,6 +791,71 @@
       tokenHint.textContent = st.discord_token_set
         ? `Current saved token: ${st.discord_token_masked}. Leave blank to keep unchanged.`
         : "Enter your Discord bot token to enable stock alerts.";
+    }
+
+    // Telegram Integration
+    if (tgEnabledCheckbox) {
+      tgEnabledCheckbox.checked = Boolean(st.telegram_enabled);
+    }
+    if (tgTokenInput) {
+      tgTokenInput.value = "";
+      tgTokenInput.placeholder = st.telegram_bot_token_set
+        ? `Saved (${st.telegram_bot_token_masked}) — enter new token to replace`
+        : "Paste your Telegram bot token";
+    }
+    if (tgTokenHint) {
+      tgTokenHint.textContent = st.telegram_bot_token_set
+        ? `Current saved token: ${st.telegram_bot_token_masked}. Leave blank to keep unchanged.`
+        : "Enter your Telegram bot token from @BotFather.";
+    }
+    if (tgChatIdInput) {
+      tgChatIdInput.value = st.telegram_chat_id || "";
+    }
+    if (tgBadge) {
+      if (st.telegram_bot_token_set && st.telegram_chat_id) {
+        tgBadge.textContent = "Configured";
+        tgBadge.className = "badge badge--in-stock";
+      } else if (st.telegram_bot_token_set || st.telegram_chat_id) {
+        tgBadge.textContent = "Incomplete";
+        tgBadge.className = "badge badge--error";
+      } else {
+        tgBadge.textContent = "Not Configured";
+        tgBadge.className = "badge badge--neutral";
+      }
+    }
+
+    // Webhook Integration
+    if (webhookEnabledCheckbox) {
+      webhookEnabledCheckbox.checked = Boolean(st.webhook_enabled);
+    }
+    if (webhookUrlInput) {
+      webhookUrlInput.value = st.webhook_url || "";
+    }
+    if (webhookBadge) {
+      if ((st.webhook_url || "").trim()) {
+        webhookBadge.textContent = "Configured";
+        webhookBadge.className = "badge badge--in-stock";
+      } else {
+        webhookBadge.textContent = "Not Configured";
+        webhookBadge.className = "badge badge--neutral";
+      }
+    }
+
+    // Price Alerts, Proxy Rotation & Domain Rate Limit
+    if (priceAlertsCheckbox) {
+      priceAlertsCheckbox.checked =
+        st.price_alerts_enabled !== undefined
+          ? Boolean(st.price_alerts_enabled)
+          : true;
+    }
+    if (proxyEnabledCheckbox) {
+      proxyEnabledCheckbox.checked = Boolean(st.proxy_enabled);
+    }
+    if (proxyListTextarea) {
+      proxyListTextarea.value = st.proxy_list || "";
+    }
+    if (domainDelayInput) {
+      domainDelayInput.value = String(st.domain_rate_limit_delay ?? 1.0);
     }
 
     state.settingsDirty = false;
@@ -949,6 +1108,13 @@
       }
 
       const detectedLabel = formatDetectedBy(res.strategy_used, res.detected_by);
+      const hasPrice = res.price !== null && res.price !== undefined;
+      const priceCurrency = res.currency || "USD";
+      const priceMarkup = hasPrice
+        ? `<p class="test-result-price">Detected Price: <strong>${escapeHtml(
+            formatPrice(res.price, priceCurrency)
+          )}</strong> (${escapeHtml(priceCurrency)})</p>`
+        : "";
 
       if (res.error) {
         resultEl.className = "inline-feedback inline-feedback--error";
@@ -958,6 +1124,7 @@
             <span class="test-result-method">${escapeHtml(detectedLabel)}</span>
           </div>
           <p class="test-result-details">${escapeHtml(res.error)}</p>
+          ${priceMarkup}
         `;
       } else if (res.in_stock) {
         const detailText =
@@ -969,6 +1136,7 @@
             <span class="test-result-method">${escapeHtml(detectedLabel)}</span>
           </div>
           <p class="test-result-details">${escapeHtml(detailText)}</p>
+          ${priceMarkup}
         `;
       } else {
         const detailText =
@@ -980,6 +1148,7 @@
             <span class="test-result-method">${escapeHtml(detectedLabel)}</span>
           </div>
           <p class="test-result-details">${escapeHtml(detailText)}</p>
+          ${priceMarkup}
         `;
       }
     } catch (error) {
@@ -1182,6 +1351,195 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Price History Modal
+  // ---------------------------------------------------------------------------
+
+  function closePriceHistoryModal() {
+    const modal = document.getElementById("price-history-modal");
+    if (modal) {
+      modal.classList.add("is-hidden");
+    }
+  }
+
+  async function openPriceHistoryModal(productName, productId = null) {
+    const modal = document.getElementById("price-history-modal");
+    const titleEl = document.getElementById("price-history-modal-title");
+    const currentPriceEl = document.getElementById("price-history-current-price");
+    const changeStatEl = document.getElementById("price-history-change-stat");
+    const countStatEl = document.getElementById("price-history-count-stat");
+    const loadingEl = document.getElementById("price-history-loading");
+    const errorEl = document.getElementById("price-history-error");
+    const listEl = document.getElementById("price-history-list");
+    const tbodyEl = document.getElementById("price-history-tbody");
+    const emptyEl = document.getElementById("price-history-empty");
+
+    const matchedProduct =
+      state.products.find((p) => productId !== null && p.id === productId) ||
+      state.products.find((p) => p.name === productName) ||
+      null;
+
+    const displayProductName = matchedProduct
+      ? matchedProduct.name
+      : productName || "Product";
+
+    if (titleEl) {
+      titleEl.textContent = `Price History — ${displayProductName}`;
+    }
+
+    if (currentPriceEl) {
+      currentPriceEl.textContent =
+        matchedProduct &&
+        matchedProduct.current_price !== null &&
+        matchedProduct.current_price !== undefined
+          ? formatPrice(matchedProduct.current_price, matchedProduct.currency)
+          : "—";
+    }
+
+    if (changeStatEl) {
+      changeStatEl.textContent = "—";
+      changeStatEl.className = "price-stat-value price-stat-value--sm";
+      if (
+        matchedProduct &&
+        matchedProduct.current_price !== null &&
+        matchedProduct.current_price !== undefined &&
+        matchedProduct.previous_price !== null &&
+        matchedProduct.previous_price !== undefined &&
+        Number(matchedProduct.previous_price) !==
+          Number(matchedProduct.current_price)
+      ) {
+        const curr = Number(matchedProduct.current_price);
+        const prev = Number(matchedProduct.previous_price);
+        const diff = curr - prev;
+        const pct = prev > 0 ? (diff / prev) * 100 : 0;
+        const sign = diff > 0 ? "+" : "-";
+        const formattedDiff = formatPrice(
+          Math.abs(diff),
+          matchedProduct.currency
+        );
+        changeStatEl.textContent = `${diff < 0 ? "▼" : "▲"} ${sign}${formattedDiff} (${sign}${Math.abs(pct).toFixed(1)}%)`;
+        changeStatEl.className =
+          diff < 0
+            ? "price-stat-value price-stat-value--sm price-stat-value--emerald"
+            : "price-stat-value price-stat-value--sm price-stat-value--rose";
+      }
+    }
+
+    if (countStatEl) {
+      countStatEl.textContent = "0";
+    }
+    if (tbodyEl) {
+      tbodyEl.innerHTML = "";
+    }
+    if (listEl) listEl.classList.add("is-hidden");
+    if (emptyEl) emptyEl.classList.add("is-hidden");
+    if (errorEl) {
+      errorEl.classList.add("is-hidden");
+      errorEl.textContent = "";
+    }
+    if (loadingEl) loadingEl.classList.remove("is-hidden");
+    if (modal) modal.classList.remove("is-hidden");
+
+    try {
+      const entries = await apiFetch(
+        "/api/products/" + encodeURIComponent(displayProductName) + "/price-history"
+      );
+      const rows = Array.isArray(entries) ? entries : [];
+
+      if (loadingEl) loadingEl.classList.add("is-hidden");
+      if (countStatEl) countStatEl.textContent = String(rows.length);
+
+      if (rows.length === 0) {
+        if (emptyEl) emptyEl.classList.remove("is-hidden");
+        return;
+      }
+
+      if (
+        currentPriceEl &&
+        (currentPriceEl.textContent === "—" || !matchedProduct)
+      ) {
+        currentPriceEl.textContent = formatPrice(
+          rows[0].price,
+          rows[0].currency
+        );
+      }
+
+      if (changeStatEl && rows.length >= 2) {
+        const latest = Number(rows[0].price);
+        const prev = Number(rows[1].price);
+        if (Number.isFinite(latest) && Number.isFinite(prev) && latest !== prev) {
+          const diff = latest - prev;
+          const pct = prev > 0 ? (diff / prev) * 100 : 0;
+          const sign = diff > 0 ? "+" : "-";
+          const formattedDiff = formatPrice(
+            Math.abs(diff),
+            rows[0].currency
+          );
+          changeStatEl.textContent = `${diff < 0 ? "▼" : "▲"} ${sign}${formattedDiff} (${sign}${Math.abs(pct).toFixed(1)}%)`;
+          changeStatEl.className =
+            diff < 0
+              ? "price-stat-value price-stat-value--sm price-stat-value--emerald"
+              : "price-stat-value price-stat-value--sm price-stat-value--rose";
+        }
+      }
+
+      if (tbodyEl) {
+        tbodyEl.innerHTML = rows
+          .map((entry, idx) => {
+            const relTime = formatRelativeTime(entry.recorded_at);
+            const exactTime = formatExactTime(entry.recorded_at);
+            const currency = entry.currency || "USD";
+            const formattedPrice = formatPrice(entry.price, currency);
+
+            let deltaMarkup = `<span class="price-delta price-delta--neutral">Initial</span>`;
+            if (idx < rows.length - 1) {
+              const prevEntry = rows[idx + 1];
+              const diff = Number(entry.price) - Number(prevEntry.price);
+              if (Number.isFinite(diff)) {
+                if (diff < 0) {
+                  const pct =
+                    Number(prevEntry.price) > 0
+                      ? (Math.abs(diff) / Number(prevEntry.price)) * 100
+                      : 0;
+                  deltaMarkup = `<span class="price-delta price-delta--drop">▼ -${escapeHtml(
+                    formatPrice(Math.abs(diff), currency)
+                  )} (-${pct.toFixed(1)}%)</span>`;
+                } else if (diff > 0) {
+                  const pct =
+                    Number(prevEntry.price) > 0
+                      ? (diff / Number(prevEntry.price)) * 100
+                      : 0;
+                  deltaMarkup = `<span class="price-delta price-delta--up">▲ +${escapeHtml(
+                    formatPrice(diff, currency)
+                  )} (+${pct.toFixed(1)}%)</span>`;
+                } else {
+                  deltaMarkup = `<span class="price-delta price-delta--neutral">— No change</span>`;
+                }
+              }
+            }
+
+            return `
+              <tr>
+                <td class="history-time" title="${escapeHtml(exactTime)}">${escapeHtml(relTime)}</td>
+                <td class="price-history-price">${escapeHtml(formattedPrice)}</td>
+                <td><span class="badge badge--neutral">${escapeHtml(currency)}</span></td>
+                <td>${deltaMarkup}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+
+      if (listEl) listEl.classList.remove("is-hidden");
+    } catch (error) {
+      if (loadingEl) loadingEl.classList.add("is-hidden");
+      if (errorEl) {
+        errorEl.textContent = error.message || "Failed to load price history.";
+        errorEl.classList.remove("is-hidden");
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Settings Actions
   // ---------------------------------------------------------------------------
 
@@ -1192,6 +1550,19 @@
     const channelInput = document.getElementById("setting-discord-channel-id");
     const intervalInput = document.getElementById("setting-check-interval");
     const notifCheckbox = document.getElementById("setting-notifications-enabled");
+
+    const tgEnabledCheckbox = document.getElementById("setting-telegram-enabled");
+    const tgTokenInput = document.getElementById("setting-telegram-token");
+    const tgChatIdInput = document.getElementById("setting-telegram-chat-id");
+
+    const webhookEnabledCheckbox = document.getElementById("setting-webhook-enabled");
+    const webhookUrlInput = document.getElementById("setting-webhook-url");
+
+    const priceAlertsCheckbox = document.getElementById("setting-price-alerts-enabled");
+    const proxyEnabledCheckbox = document.getElementById("setting-proxy-enabled");
+    const proxyListTextarea = document.getElementById("setting-proxy-list");
+    const domainDelayInput = document.getElementById("setting-domain-rate-limit-delay");
+
     const saveBtn = document.getElementById("btn-save-settings");
     const saveLabel = document.getElementById("btn-save-settings-label");
 
@@ -1201,15 +1572,43 @@
       return;
     }
 
+    const delayVal = Number.parseFloat(
+      domainDelayInput ? domainDelayInput.value : "1.0"
+    );
+    if (!Number.isFinite(delayVal) || delayVal < 0 || delayVal > 300) {
+      showToast(
+        "Domain rate limit delay must be between 0 and 300 seconds.",
+        "error"
+      );
+      return;
+    }
+
     const payload = {
       discord_channel_id: channelInput ? channelInput.value.trim() : "",
       check_stock_interval: intervalVal,
       notifications_enabled: notifCheckbox ? notifCheckbox.checked : true,
+      telegram_enabled: tgEnabledCheckbox ? tgEnabledCheckbox.checked : false,
+      telegram_chat_id: tgChatIdInput ? tgChatIdInput.value.trim() : "",
+      webhook_enabled: webhookEnabledCheckbox
+        ? webhookEnabledCheckbox.checked
+        : false,
+      webhook_url: webhookUrlInput ? webhookUrlInput.value.trim() : "",
+      price_alerts_enabled: priceAlertsCheckbox
+        ? priceAlertsCheckbox.checked
+        : true,
+      proxy_enabled: proxyEnabledCheckbox ? proxyEnabledCheckbox.checked : false,
+      proxy_list: proxyListTextarea ? proxyListTextarea.value : "",
+      domain_rate_limit_delay: delayVal,
     };
 
     const rawToken = tokenInput ? tokenInput.value.trim() : "";
     if (rawToken) {
       payload.discord_token = rawToken;
+    }
+
+    const rawTgToken = tgTokenInput ? tgTokenInput.value.trim() : "";
+    if (rawTgToken) {
+      payload.telegram_bot_token = rawTgToken;
     }
 
     setButtonLoading(saveBtn, saveLabel, true, "Saving...", "Save Settings");
@@ -1299,6 +1698,139 @@
     }
   }
 
+  async function handleTestTelegram() {
+    const tokenInput = document.getElementById("setting-telegram-token");
+    const chatIdInput = document.getElementById("setting-telegram-chat-id");
+    const btn = document.getElementById("btn-test-telegram");
+    const label = document.getElementById("btn-test-telegram-label");
+    const feedback = document.getElementById("test-telegram-feedback");
+
+    const payload = {};
+    const rawToken = tokenInput ? tokenInput.value.trim() : "";
+    const rawChatId = chatIdInput ? chatIdInput.value.trim() : "";
+    if (rawToken) {
+      payload.telegram_bot_token = rawToken;
+    }
+    if (rawChatId) {
+      payload.telegram_chat_id = rawChatId;
+    }
+
+    setButtonLoading(
+      btn,
+      label,
+      true,
+      "Sending Test...",
+      "Send Test Telegram Notification"
+    );
+
+    if (feedback) {
+      feedback.className = "inline-feedback";
+      feedback.textContent = "Sending test notification to Telegram...";
+    }
+
+    try {
+      const res = await apiFetch("/api/settings/test-telegram", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      if (res.success) {
+        if (feedback) {
+          feedback.className = "inline-feedback inline-feedback--success";
+          feedback.textContent =
+            "Test notification delivered! Check your Telegram chat.";
+        }
+        showToast("Test Telegram notification sent!", "success");
+      } else {
+        const errMsg = res.error || "Failed to send Telegram notification.";
+        if (feedback) {
+          feedback.className = "inline-feedback inline-feedback--error";
+          feedback.textContent = errMsg;
+        }
+        showToast(errMsg, "error");
+      }
+    } catch (error) {
+      const errMsg = error.message || "Telegram test request failed.";
+      if (feedback) {
+        feedback.className = "inline-feedback inline-feedback--error";
+        feedback.textContent = errMsg;
+      }
+      showToast(errMsg, "error");
+    } finally {
+      setButtonLoading(
+        btn,
+        label,
+        false,
+        "Sending Test...",
+        "Send Test Telegram Notification"
+      );
+    }
+  }
+
+  async function handleTestWebhook() {
+    const urlInput = document.getElementById("setting-webhook-url");
+    const btn = document.getElementById("btn-test-webhook");
+    const label = document.getElementById("btn-test-webhook-label");
+    const feedback = document.getElementById("test-webhook-feedback");
+
+    const payload = {};
+    const rawUrl = urlInput ? urlInput.value.trim() : "";
+    if (rawUrl) {
+      payload.webhook_url = rawUrl;
+    }
+
+    setButtonLoading(
+      btn,
+      label,
+      true,
+      "Sending Test...",
+      "Send Test Webhook Notification"
+    );
+
+    if (feedback) {
+      feedback.className = "inline-feedback";
+      feedback.textContent = "Sending test webhook payload...";
+    }
+
+    try {
+      const res = await apiFetch("/api/settings/test-webhook", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
+      if (res.success) {
+        if (feedback) {
+          feedback.className = "inline-feedback inline-feedback--success";
+          feedback.textContent =
+            "Test webhook delivered! Endpoint responded successfully.";
+        }
+        showToast("Test webhook notification sent!", "success");
+      } else {
+        const errMsg = res.error || "Failed to deliver webhook notification.";
+        if (feedback) {
+          feedback.className = "inline-feedback inline-feedback--error";
+          feedback.textContent = errMsg;
+        }
+        showToast(errMsg, "error");
+      }
+    } catch (error) {
+      const errMsg = error.message || "Webhook test request failed.";
+      if (feedback) {
+        feedback.className = "inline-feedback inline-feedback--error";
+        feedback.textContent = errMsg;
+      }
+      showToast(errMsg, "error");
+    } finally {
+      setButtonLoading(
+        btn,
+        label,
+        false,
+        "Sending Test...",
+        "Send Test Webhook Notification"
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Event Wiring & Bootstrap
   // ---------------------------------------------------------------------------
@@ -1372,6 +1904,15 @@
     const productsGrid = document.getElementById("products-grid");
     if (productsGrid) {
       productsGrid.addEventListener("click", (event) => {
+        const priceHistoryBtn = event.target.closest(".js-view-price-history");
+        if (priceHistoryBtn) {
+          const productId = priceHistoryBtn.dataset.productId
+            ? Number(priceHistoryBtn.dataset.productId)
+            : null;
+          const productName = priceHistoryBtn.dataset.productName || "";
+          openPriceHistoryModal(productName, productId);
+          return;
+        }
         const checkBtn = event.target.closest(".js-check-product");
         if (checkBtn) {
           handleCheckProduct(Number(checkBtn.dataset.id));
@@ -1475,11 +2016,32 @@
       });
     }
 
+    // Price History Modal
+    const closePriceHistoryBtn = document.getElementById(
+      "btn-close-price-history-modal"
+    );
+    const donePriceHistoryBtn = document.getElementById("btn-done-price-history");
+    const priceHistoryModal = document.getElementById("price-history-modal");
+    if (closePriceHistoryBtn) {
+      closePriceHistoryBtn.addEventListener("click", closePriceHistoryModal);
+    }
+    if (donePriceHistoryBtn) {
+      donePriceHistoryBtn.addEventListener("click", closePriceHistoryModal);
+    }
+    if (priceHistoryModal) {
+      priceHistoryModal.addEventListener("click", (event) => {
+        if (event.target === priceHistoryModal) {
+          closePriceHistoryModal();
+        }
+      });
+    }
+
     // Escape closes open modals
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") {
         closeProductModal();
         closeConfirmModal();
+        closePriceHistoryModal();
       }
     });
 
@@ -1495,19 +2057,40 @@
       });
     }
 
-    const toggleTokenBtn = document.getElementById("btn-toggle-token-visibility");
-    const tokenInput = document.getElementById("setting-discord-token");
-    if (toggleTokenBtn && tokenInput) {
-      toggleTokenBtn.addEventListener("click", () => {
-        const isPassword = tokenInput.type === "password";
-        tokenInput.type = isPassword ? "text" : "password";
-        toggleTokenBtn.textContent = isPassword ? "Hide" : "Show";
-      });
+    function wireTokenVisibilityToggle(btnId, inputId) {
+      const toggleBtn = document.getElementById(btnId);
+      const inputEl = document.getElementById(inputId);
+      if (toggleBtn && inputEl) {
+        toggleBtn.addEventListener("click", () => {
+          const isPassword = inputEl.type === "password";
+          inputEl.type = isPassword ? "text" : "password";
+          toggleBtn.textContent = isPassword ? "Hide" : "Show";
+        });
+      }
     }
+
+    wireTokenVisibilityToggle(
+      "btn-toggle-token-visibility",
+      "setting-discord-token"
+    );
+    wireTokenVisibilityToggle(
+      "btn-toggle-telegram-token",
+      "setting-telegram-token"
+    );
 
     const testDiscordBtn = document.getElementById("btn-test-discord");
     if (testDiscordBtn) {
       testDiscordBtn.addEventListener("click", handleTestDiscord);
+    }
+
+    const testTelegramBtn = document.getElementById("btn-test-telegram");
+    if (testTelegramBtn) {
+      testTelegramBtn.addEventListener("click", handleTestTelegram);
+    }
+
+    const testWebhookBtn = document.getElementById("btn-test-webhook");
+    if (testWebhookBtn) {
+      testWebhookBtn.addEventListener("click", handleTestWebhook);
     }
   }
 

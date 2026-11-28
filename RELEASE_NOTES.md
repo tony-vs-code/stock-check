@@ -1,27 +1,31 @@
-# Stock Checker v0.3.1 Release Notes
+# Stock Checker v0.4.0 Release Notes
 
 ## Overview
 
-Stock Checker `v0.3.1` introduces the official rebranding to **Stock Checker**, a custom SVG site icon and header emblem (`static/favicon.svg`), dynamic **Method** pills on product cards replacing legacy static selector rows, and full strategy selection support in the Discord `/add_product` slash command.
+Stock Checker `v0.4.0` introduces **Multi-Channel Notifications** (Telegram and Custom Generic Webhooks alongside Discord), **Proxy Rotation & Per-Domain Rate Limiting** for resilient scraping, and **End-to-End Price Tracking & History** with automatic price-drop alerts across all detection strategies.
 
 ## Highlights & Enhancements
 
-### Official Rebranding to Stock Checker (`static/index.html`, `api.py`, `discord_client.py`, `bot_commands.py`)
-- **Unified Brand Identity**: Rebranded the Web UI header, HTML page title (`Stock Checker - Real-Time Inventory & Stock Monitor`), FastAPI application title, Discord test alert messages, and Discord bot startup messages to **Stock Checker**.
-- **Updated Search & Onboarding Copy**: Updated dashboard search placeholder and empty-state guidance to highlight multi-strategy auto-detection without requiring CSS selectors.
+### Multi-Channel Notifications (`notifications.py`, `api.py`, `stock_checker.py`, `static/`)
+- **Telegram Bot Integration**: Added `send_telegram_notification` via the Telegram Bot API with configurable Bot Token (masked on read in `/api/settings`) and Chat ID, plus live test delivery via `POST /api/settings/test-telegram`.
+- **Custom Generic Webhook Integration**: Added `send_webhook_notification` and `build_webhook_payload` delivering structured JSON events (`event`, `product`, `url`, `status`, `price`, `message`, `timestamp`) to any HTTP/HTTPS webhook endpoint, with live testing via `POST /api/settings/test-webhook`.
+- **Unified Alert Dispatch**: Both restock (`in_stock`) and price-drop (`price_drop`) events dispatch concurrently across enabled Discord (with embed support), Telegram, and Webhook channels.
+- **Dashboard Notification Settings**: Added **Telegram Integration** and **Webhook Integration** cards in Settings with enable toggles, masked token visibility toggle, status badges, and one-click test buttons.
 
-### Custom SVG Favicon & Header Icon (`static/favicon.svg`, `static/styles.css`)
-- **New Custom Brand Icon**: Added `static/favicon.svg` featuring an isometric inventory box, sky-blue radar pulse arcs, and a glowing emerald stock-in checkmark badge, wired into both `<link rel="icon">` and the dashboard header.
+### Proxy Rotation & Per-Domain Rate Limiting (`stock_checker.py`, `utils.py`, `static/`)
+- **Round-Robin Proxy Pool (`ProxyRotator`)**: Supports configuring newline- or comma-separated HTTP/HTTPS proxy URLs, rotating cleanly across enabled proxies on product fetches (`fetch_product_page(url, proxy=...)`).
+- **Per-Domain Request Throttling (`DomainRateLimiter`)**: Enforces a configurable minimum delay (`domain_rate_limit_delay`) between consecutive requests to the same hostname to reduce rate-limiting and anti-bot blocks.
+- **Anti-Bot Controls UI**: Added Proxy Rotation toggle, Proxy Pool list input, and Per-Domain Rate Limit Delay controls in the **Polling, Anti-Bot & Price Alerts** settings card.
 
-### Dynamic Product Card Method Pills (`static/app.js`, `static/styles.css`)
-- **Strategy-Aware Card Metadata**: Replaced the legacy static `Selector` row on product cards with dynamic **Method** pills (`⚡ Auto-Detect`, `📄 Schema.org JSON-LD`, `🛍️ Shopify JSON API`, `🔍 Text & Button Heuristics`, or **Selector** for `css_selector`), including optional fallback selector pills when configured under `auto`.
-
-### Discord `/add_product` Strategy Support (`bot_commands.py`)
-- **Strategy Selection & Auto-Detect Default**: Updated `/add_product` with an optional `strategy` choice parameter (`auto`, `json_ld`, `shopify`, `text_heuristic`, `css_selector`) defaulting to `auto`, with clean selector formatting (`(Auto-detect - no selector required)` when no selector is needed).
+### Price Tracking & History (`database.py`, `stock_checker.py`, `api.py`, `static/`)
+- **Multi-Strategy Price Extraction**: Extracts product prices and currencies across Shopify JSON API, Schema.org JSON-LD `Offer` data, OpenGraph/product meta tags, and page text heuristics.
+- **SQLite Price History Persistence**: Added `price_history` table and backwards-compatible `ALTER TABLE` migrations adding `current_price`, `previous_price`, and `currency` columns to `products`.
+- **Price Drop Detection & Alerts**: Records historical prices on change and dispatches price-drop alerts (with previous vs. new price comparison and savings percentage) when a product's price decreases and price alerts are enabled.
+- **Price History API & UI Modal**: Added `GET /api/products/{name}/price-history`, product card price & delta pills, and an interactive **Price History** modal displaying current price, overall change, tracked entries, and chronological price table.
 
 ## Reliability & Fixes
 
-- **Automated Test Suite (`test_main.py`)**: **30/30 tests passing**, including dedicated coverage for `/add_product` strategy choices, `(Auto-detect - no selector required)` formatting, and `Stock Checker` HTML/API branding.
+- **Automated Test Suite (`test_main.py`)**: **42/42 tests passing**, including dedicated coverage for Telegram/Webhook dispatchers, masked token validation, proxy rotation, domain rate limiting, multi-strategy price extraction, SQLite price history migrations, price drop alerts, and frontend contract checks.
 - **Cross-Tier Contract Audit & JS Syntax**: Verified full alignment across backend API routes and frontend DOM IDs, plus clean JavaScript syntax verification (`node --check static/app.js`).
 - **Linting & Formatting**: Verified clean `uv run ruff check .` and `uv run ruff format --check .`.
 
@@ -37,4 +41,4 @@ Stock Checker `v0.3.1` introduces the official rebranding to **Stock Checker**, 
    ```bash
    curl -f http://localhost:8000/api/health
    ```
-   Expected response: `{"status":"ok","version":"0.3.1"}`.
+   Expected response: `{"status":"ok","version":"0.4.0"}`.

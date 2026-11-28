@@ -243,7 +243,7 @@
         <div class="section-header">
           <div>
             <h2 class="section-title">Activity Log</h2>
-            <p class="section-subtitle">Chronological stock check events and Discord alert deliveries</p>
+            <p class="section-subtitle">Chronological stock check events and multi-channel alert deliveries</p>
           </div>
           <button id="btn-clear-history" type="button" class="btn btn-danger-ghost">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -262,7 +262,7 @@
                   <th>Time</th>
                   <th>Product</th>
                   <th>Status</th>
-                  <th>Discord Alert</th>
+                  <th>Alert Delivery</th>
                   <th>Details</th>
                 </tr>
               </thead>
@@ -288,8 +288,8 @@
       <section id="view-settings" class="tab-view" aria-labelledby="tab-settings">
         <div class="section-header">
           <div>
-            <h2 class="section-title">Monitor &amp; Discord Settings</h2>
-            <p class="section-subtitle">Configure polling cadence and Discord alert credentials</p>
+            <h2 class="section-title">Monitor &amp; Notification Settings</h2>
+            <p class="section-subtitle">Configure multi-channel alerts, polling cadence, anti-bot throttling, and price alerts</p>
           </div>
         </div>
 
@@ -348,29 +348,161 @@
 
           <div class="panel-card settings-card">
             <div class="card-heading">
-              <h3 class="card-title">Polling &amp; Alerts</h3>
+              <h3 class="card-title">Telegram Integration</h3>
+              <span id="settings-telegram-badge" class="badge badge--neutral">Not Configured</span>
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <label for="setting-telegram-enabled" class="form-label toggle-label">
+                  Telegram Alerts Enabled
+                </label>
+                <p class="form-hint">
+                  Deliver stock and price-drop notifications to a Telegram chat or channel.
+                </p>
+              </div>
+              <label class="switch">
+                <input id="setting-telegram-enabled" type="checkbox" />
+                <span class="switch-slider"></span>
+              </label>
             </div>
 
             <div class="form-group">
-              <label for="setting-check-interval" class="form-label">Check Interval (seconds)</label>
+              <label for="setting-telegram-token" class="form-label">Telegram Bot Token</label>
+              <div class="input-with-action">
+                <input
+                  id="setting-telegram-token"
+                  type="password"
+                  class="form-input"
+                  autocomplete="off"
+                  placeholder="Paste your Telegram bot token"
+                />
+                <button id="btn-toggle-telegram-token" type="button" class="input-action-btn" title="Show or hide Telegram bot token" aria-label="Show or hide Telegram bot token">
+                  Show
+                </button>
+              </div>
+              <p id="setting-telegram-token-hint" class="form-hint">
+                Leave blank to keep the currently saved token unchanged.
+              </p>
+            </div>
+
+            <div class="form-group">
+              <label for="setting-telegram-chat-id" class="form-label">Telegram Chat ID</label>
               <input
-                id="setting-check-interval"
-                type="number"
+                id="setting-telegram-chat-id"
+                type="text"
                 class="form-input"
-                min="1"
-                max="86400"
-                step="1"
-                required
+                placeholder="e.g. -1001234567890 or 123456789"
               />
               <p class="form-hint">
-                Minimum 1 second, maximum 86,400 seconds (24 hours). Recommended: 15–60s.
+                User, group, or channel ID (from @userinfobot or Bot API updates).
               </p>
+            </div>
+
+            <div class="test-discord-row">
+              <button id="btn-test-telegram" type="button" class="btn btn-secondary">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+                <span id="btn-test-telegram-label">Send Test Telegram Notification</span>
+              </button>
+            </div>
+
+            <div id="test-telegram-feedback" class="inline-feedback is-hidden" role="status" aria-live="polite"></div>
+          </div>
+
+          <div class="panel-card settings-card">
+            <div class="card-heading">
+              <h3 class="card-title">Webhook Integration</h3>
+              <span id="settings-webhook-badge" class="badge badge--neutral">Not Configured</span>
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <label for="setting-webhook-enabled" class="form-label toggle-label">
+                  Generic Webhook Enabled
+                </label>
+                <p class="form-hint">
+                  Send JSON POST payloads to Slack, Discord webhooks, n8n, or custom endpoints.
+                </p>
+              </div>
+              <label class="switch">
+                <input id="setting-webhook-enabled" type="checkbox" />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="form-group">
+              <label for="setting-webhook-url" class="form-label">Webhook URL</label>
+              <input
+                id="setting-webhook-url"
+                type="url"
+                class="form-input"
+                maxlength="2048"
+                placeholder="https://hooks.example.com/stock-alerts"
+              />
+              <p class="form-hint">
+                Must start with http:// or https://. Receives structured JSON alert events.
+              </p>
+            </div>
+
+            <div class="test-discord-row">
+              <button id="btn-test-webhook" type="button" class="btn btn-secondary">
+                <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+                <span id="btn-test-webhook-label">Send Test Webhook Notification</span>
+              </button>
+            </div>
+
+            <div id="test-webhook-feedback" class="inline-feedback is-hidden" role="status" aria-live="polite"></div>
+          </div>
+
+          <div class="panel-card settings-card">
+            <div class="card-heading">
+              <h3 class="card-title">Polling, Anti-Bot &amp; Price Alerts</h3>
+            </div>
+
+            <div class="settings-split-row">
+              <div class="form-group">
+                <label for="setting-check-interval" class="form-label">Check Interval (seconds)</label>
+                <input
+                  id="setting-check-interval"
+                  type="number"
+                  class="form-input"
+                  min="1"
+                  max="86400"
+                  step="1"
+                  required
+                />
+                <p class="form-hint">
+                  1–86,400s. Recommended: 15–60s.
+                </p>
+              </div>
+
+              <div class="form-group">
+                <label for="setting-domain-rate-limit-delay" class="form-label">Domain Rate Limit (seconds)</label>
+                <input
+                  id="setting-domain-rate-limit-delay"
+                  type="number"
+                  class="form-input"
+                  min="0"
+                  max="300"
+                  step="0.1"
+                  value="1.0"
+                />
+                <p class="form-hint">
+                  Minimum delay between requests per domain (0–300s).
+                </p>
+              </div>
             </div>
 
             <div class="toggle-row">
               <div class="toggle-info">
                 <label for="setting-notifications-enabled" class="form-label toggle-label">
-                  Notifications Enabled
+                  Discord Notifications Enabled
                 </label>
                 <p class="form-hint">
                   Send Discord messages automatically when a product transitions to In Stock.
@@ -380,6 +512,49 @@
                 <input id="setting-notifications-enabled" type="checkbox" checked />
                 <span class="switch-slider"></span>
               </label>
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <label for="setting-price-alerts-enabled" class="form-label toggle-label">
+                  Price Drop Alerts
+                </label>
+                <p class="form-hint">
+                  Notify active channels when a tracked product's detected price drops.
+                </p>
+              </div>
+              <label class="switch">
+                <input id="setting-price-alerts-enabled" type="checkbox" checked />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="toggle-row">
+              <div class="toggle-info">
+                <label for="setting-proxy-enabled" class="form-label toggle-label">
+                  Proxy Rotation
+                </label>
+                <p class="form-hint">
+                  Rotate outbound HTTP/HTTPS/SOCKS proxies per check to mitigate rate limits.
+                </p>
+              </div>
+              <label class="switch">
+                <input id="setting-proxy-enabled" type="checkbox" />
+                <span class="switch-slider"></span>
+              </label>
+            </div>
+
+            <div class="form-group">
+              <label for="setting-proxy-list" class="form-label">Proxy List (one URL per line)</label>
+              <textarea
+                id="setting-proxy-list"
+                class="form-input form-input--mono form-textarea"
+                rows="3"
+                placeholder="http://user:pass@proxy1.example.com:8080&#10;http://proxy2.example.com:3128"
+              ></textarea>
+              <p class="form-hint">
+                Enter one HTTP, HTTPS, or SOCKS proxy URL per line.
+              </p>
             </div>
 
             <div class="settings-actions">
@@ -523,6 +698,68 @@
         <div class="modal-footer">
           <button id="btn-confirm-cancel" type="button" class="btn btn-ghost">Cancel</button>
           <button id="btn-confirm-ok" type="button" class="btn btn-danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PRICE HISTORY MODAL -->
+  <div id="price-history-modal" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="price-history-modal-title">
+    <div class="modal-dialog modal-dialog--lg">
+      <div class="modal-header">
+        <h2 id="price-history-modal-title" class="modal-title">Price History</h2>
+        <button id="btn-close-price-history-modal" type="button" class="icon-btn" aria-label="Close price history dialog">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div id="price-history-summary" class="price-history-summary">
+          <div class="price-stat-box">
+            <span class="price-stat-label">Current Price</span>
+            <strong id="price-history-current-price" class="price-stat-value">—</strong>
+          </div>
+          <div class="price-stat-box">
+            <span class="price-stat-label">Latest Change</span>
+            <strong id="price-history-change-stat" class="price-stat-value price-stat-value--sm">—</strong>
+          </div>
+          <div class="price-stat-box">
+            <span class="price-stat-label">Recorded Points</span>
+            <strong id="price-history-count-stat" class="price-stat-value price-stat-value--sm">0</strong>
+          </div>
+        </div>
+
+        <div id="price-history-loading" class="inline-feedback is-hidden" role="status" aria-live="polite">
+          Loading price history...
+        </div>
+
+        <div id="price-history-error" class="inline-feedback inline-feedback--error is-hidden" role="alert"></div>
+
+        <div id="price-history-list" class="price-history-list is-hidden">
+          <table class="price-history-table">
+            <thead>
+              <tr>
+                <th>Recorded</th>
+                <th>Price</th>
+                <th>Currency</th>
+                <th>Trend / Delta</th>
+              </tr>
+            </thead>
+            <tbody id="price-history-tbody"></tbody>
+          </table>
+        </div>
+
+        <div id="price-history-empty" class="price-history-empty is-hidden">
+          <p class="price-history-empty-title">No price history recorded yet</p>
+          <p class="price-history-empty-desc">
+            Price observations are saved automatically whenever a stock check detects a product price.
+          </p>
+        </div>
+
+        <div class="modal-footer">
+          <button id="btn-done-price-history" type="button" class="btn btn-secondary">Close</button>
         </div>
       </div>
     </div>

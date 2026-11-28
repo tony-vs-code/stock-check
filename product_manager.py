@@ -16,6 +16,9 @@ class Product:
     strategy: str = "auto"
     strategy_details: Optional[str] = None
     in_stock: bool = False
+    current_price: Optional[float] = None
+    currency: str = "USD"
+    previous_price: Optional[float] = None
     id: Optional[int] = None
     last_checked: Optional[str] = None
     last_status_change: Optional[str] = None
@@ -32,6 +35,9 @@ class Product:
             "strategy": self.strategy,
             "strategy_details": self.strategy_details,
             "in_stock": self.in_stock,
+            "current_price": self.current_price,
+            "currency": self.currency,
+            "previous_price": self.previous_price,
             "last_checked": self.last_checked,
             "last_status_change": self.last_status_change,
             "last_error": self.last_error,
@@ -49,6 +55,9 @@ class Product:
             strategy=data.get("strategy") or "auto",
             strategy_details=data.get("strategy_details"),
             in_stock=bool(data.get("in_stock", False)),
+            current_price=data.get("current_price"),
+            currency=data.get("currency") or "USD",
+            previous_price=data.get("previous_price"),
             last_checked=data.get("last_checked"),
             last_status_change=data.get("last_status_change"),
             last_error=data.get("last_error"),

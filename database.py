@@ -46,6 +46,15 @@ class Database:
     DEFAULT_SETTINGS: dict[str, str] = {
         "check_stock_interval": "15",
         "notifications_enabled": "true",
+        "telegram_bot_token": "",
+        "telegram_chat_id": "",
+        "telegram_enabled": "false",
+        "webhook_url": "",
+        "webhook_enabled": "false",
+        "price_alerts_enabled": "true",
+        "proxy_list": "",
+        "proxy_enabled": "false",
+        "domain_rate_limit_delay": "1.0",
     }
 
     def __init__(
@@ -79,6 +88,7 @@ class Database:
 
     _PRODUCT_COLUMNS = (
         "id, name, url, selector, strategy, strategy_details, in_stock, "
+        "current_price, currency, previous_price, "
         "last_checked, last_status_change, last_error, created_at"
     )
 
@@ -115,6 +125,9 @@ class Database:
                 strategy TEXT DEFAULT 'auto',
                 strategy_details TEXT,
                 in_stock INTEGER DEFAULT 0,
+                current_price REAL,
+                currency TEXT DEFAULT 'USD',
+                previous_price REAL,
                 last_checked TIMESTAMP,
                 last_status_change TIMESTAMP,
                 last_error TEXT,
@@ -132,6 +145,12 @@ class Database:
             conn.execute("ALTER TABLE products ADD COLUMN strategy TEXT DEFAULT 'auto'")
         if "strategy_details" not in existing_columns:
             conn.execute("ALTER TABLE products ADD COLUMN strategy_details TEXT")
+        if "current_price" not in existing_columns:
+            conn.execute("ALTER TABLE products ADD COLUMN current_price REAL")
+        if "currency" not in existing_columns:
+            conn.execute("ALTER TABLE products ADD COLUMN currency TEXT DEFAULT 'USD'")
+        if "previous_price" not in existing_columns:
+            conn.execute("ALTER TABLE products ADD COLUMN previous_price REAL")
 
         conn.execute(
             """
@@ -143,6 +162,18 @@ class Database:
                 notification_sent INTEGER DEFAULT 0,
                 message TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER,
+                product_name TEXT,
+                price REAL,
+                currency TEXT,
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
@@ -294,6 +325,9 @@ class Database:
             "strategy": row["strategy"] or "auto",
             "strategy_details": row["strategy_details"],
             "in_stock": bool(row["in_stock"]),
+            "current_price": row["current_price"],
+            "currency": row["currency"] or "USD",
+            "previous_price": row["previous_price"],
             "last_checked": row["last_checked"],
             "last_status_change": row["last_status_change"],
             "last_error": row["last_error"],
@@ -349,20 +383,35 @@ class Database:
         selector: str = "",
         strategy: str = "auto",
         strategy_details: Optional[str] = None,
+        current_price: Optional[float] = None,
+        currency: str = "USD",
+        previous_price: Optional[float] = None,
     ) -> dict[str, Any]:
         """Create a new product and return its full record."""
         now = utc_now_iso()
         clean_strategy = (strategy or "auto").strip().lower()
+        clean_currency = (currency or "USD").strip().upper() or "USD"
         with self._connection() as conn:
             try:
                 cursor = conn.execute(
                     """
                     INSERT INTO products
                         (name, url, selector, strategy, strategy_details,
-                         in_stock, created_at)
-                    VALUES (?, ?, ?, ?, ?, 0, ?)
+                         in_stock, current_price, currency, previous_price,
+                         created_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
                     """,
-                    (name, url, selector, clean_strategy, strategy_details, now),
+                    (
+                        name,
+                        url,
+                        selector,
+                        clean_strategy,
+                        strategy_details,
+                        current_price,
+                        clean_currency,
+                        previous_price,
+                        now,
+                    ),
                 )
             except sqlite3.IntegrityError as exc:
                 raise DuplicateProductError(
@@ -387,6 +436,9 @@ class Database:
         selector: str = "",
         strategy: str = "auto",
         strategy_details: Optional[str] = None,
+        current_price: Optional[float] = None,
+        currency: str = "USD",
+        previous_price: Optional[float] = None,
     ) -> dict[str, Any]:
         """Alias for create_product()."""
         return self.create_product(
@@ -395,6 +447,9 @@ class Database:
             selector=selector,
             strategy=strategy,
             strategy_details=strategy_details,
+            current_price=current_price,
+            currency=currency,
+            previous_price=previous_price,
         )
 
     def update_product(
@@ -405,6 +460,9 @@ class Database:
         selector: Optional[str] = None,
         strategy: Optional[str] = None,
         strategy_details: Optional[str] = None,
+        current_price: Optional[float] = None,
+        currency: Optional[str] = None,
+        previous_price: Optional[float] = None,
     ) -> Optional[dict[str, Any]]:
         """Update an existing product's fields and return the updated record."""
         with self._connection() as conn:
@@ -432,13 +490,29 @@ class Database:
                 if strategy_details is not None
                 else existing["strategy_details"]
             )
+            new_current_price = (
+                current_price
+                if current_price is not None
+                else existing["current_price"]
+            )
+            new_currency = (
+                (currency.strip().upper() or "USD")
+                if currency is not None
+                else (existing["currency"] or "USD")
+            )
+            new_previous_price = (
+                previous_price
+                if previous_price is not None
+                else existing["previous_price"]
+            )
 
             try:
                 conn.execute(
                     """
                     UPDATE products
                     SET name = ?, url = ?, selector = ?,
-                        strategy = ?, strategy_details = ?
+                        strategy = ?, strategy_details = ?,
+                        current_price = ?, currency = ?, previous_price = ?
                     WHERE id = ?
                     """,
                     (
@@ -447,9 +521,18 @@ class Database:
                         new_selector,
                         new_strategy,
                         new_strategy_details,
+                        new_current_price,
+                        new_currency,
+                        new_previous_price,
                         product_id,
                     ),
                 )
+                if new_name != existing["name"]:
+                    conn.execute(
+                        "UPDATE price_history SET product_name = ? "
+                        "WHERE product_id = ?",
+                        (new_name, product_id),
+                    )
             except sqlite3.IntegrityError as exc:
                 raise DuplicateProductError(
                     f"Product '{new_name}' already exists."
@@ -485,13 +568,17 @@ class Database:
         checked_at: Optional[str] = None,
         status_changed: bool = False,
         strategy_details: Optional[str] = None,
+        current_price: Optional[float] = None,
+        currency: Optional[str] = None,
+        previous_price: Optional[float] = None,
     ) -> Optional[dict[str, Any]]:
         """Update stock check metadata for a product after a check attempt."""
         timestamp = checked_at or utc_now_iso()
         with self._connection() as conn:
             existing = conn.execute(
                 """
-                SELECT id, in_stock, last_status_change, strategy_details
+                SELECT id, in_stock, last_status_change, strategy_details,
+                       current_price, currency, previous_price
                 FROM products
                 WHERE id = ?
                 """,
@@ -508,6 +595,29 @@ class Database:
                 else existing["strategy_details"]
             )
 
+            existing_price = existing["current_price"]
+            if current_price is not None:
+                new_price = current_price
+                if previous_price is not None:
+                    new_prev_price = previous_price
+                elif existing_price is not None and current_price != existing_price:
+                    new_prev_price = existing_price
+                else:
+                    new_prev_price = existing["previous_price"]
+            else:
+                new_price = existing_price
+                new_prev_price = (
+                    previous_price
+                    if previous_price is not None
+                    else existing["previous_price"]
+                )
+
+            new_currency = (
+                (currency.strip().upper() or "USD")
+                if currency is not None
+                else (existing["currency"] or "USD")
+            )
+
             conn.execute(
                 """
                 UPDATE products
@@ -515,10 +625,23 @@ class Database:
                     last_checked = ?,
                     last_status_change = ?,
                     last_error = ?,
-                    strategy_details = ?
+                    strategy_details = ?,
+                    current_price = ?,
+                    currency = ?,
+                    previous_price = ?
                 WHERE id = ?
                 """,
-                (stock_val, timestamp, change_ts, error, details_val, product_id),
+                (
+                    stock_val,
+                    timestamp,
+                    change_ts,
+                    error,
+                    details_val,
+                    new_price,
+                    new_currency,
+                    new_prev_price,
+                    product_id,
+                ),
             )
             row = conn.execute(
                 f"""
@@ -529,6 +652,58 @@ class Database:
                 (product_id,),
             ).fetchone()
             return self._row_to_product(row)
+
+    # ------------------------------------------------------------------
+    # Price history operations
+    # ------------------------------------------------------------------
+
+    def record_price(
+        self,
+        product_id: int,
+        product_name: str,
+        price: float,
+        currency: str = "USD",
+    ) -> None:
+        """Record a price observation in the price_history table."""
+        now = utc_now_iso()
+        clean_currency = (currency or "USD").strip().upper() or "USD"
+        with self._connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO price_history
+                    (product_id, product_name, price, currency, recorded_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (product_id, product_name, float(price), clean_currency, now),
+            )
+
+    def get_price_history(
+        self, product_name: str, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """Return recent price history entries for a product ordered newest first."""
+        safe_limit = max(1, min(limit, 500))
+        with self._connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, product_id, product_name, price, currency, recorded_at
+                FROM price_history
+                WHERE product_name = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (product_name, safe_limit),
+            ).fetchall()
+            return [
+                {
+                    "id": row["id"],
+                    "product_id": row["product_id"],
+                    "product_name": row["product_name"],
+                    "price": row["price"],
+                    "currency": row["currency"] or "USD",
+                    "recorded_at": row["recorded_at"],
+                }
+                for row in rows
+            ]
 
     # ------------------------------------------------------------------
     # History operations

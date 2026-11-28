@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-28
+
+### Added
+- **Multi-Channel Notification Dispatchers (`notifications.py`, `api.py`, `stock_checker.py`)**: Added Telegram Bot API (`send_telegram_notification`) and Custom Generic HTTP/HTTPS Webhook (`send_webhook_notification`, `build_webhook_payload`) support alongside Discord REST/Gateway alerts, plus `POST /api/settings/test-telegram` and `POST /api/settings/test-webhook` endpoints.
+- **Proxy Rotation & Per-Domain Rate Limiting (`stock_checker.py`, `utils.py`)**: Added `ProxyRotator` round-robin proxy pool support in `fetch_product_page` and `DomainRateLimiter` per-domain request delay throttling.
+- **Multi-Strategy Price Extraction & Price Drop Alerts (`stock_checker.py`, `database.py`, `api.py`)**: Added price and currency extraction across Shopify JSON API, JSON-LD, OpenGraph/product meta tags, and text heuristics; SQLite `price_history` table and `products` price columns (`current_price`, `previous_price`, `currency`); price-drop alert notifications; and `GET /api/products/{name}/price-history`.
+- **Dashboard UI Enhancements (`static/index.html`, `static/app.js`, `static/styles.css`)**: Added Telegram & Webhook configuration cards with test buttons and status badges, Anti-Bot proxy/rate-limit & price-alert toggles, product card price badges, and the interactive **Price History** modal.
+- **Expanded Test Coverage (`test_main.py`)**: Added 12 comprehensive unit, integration, edge-case, and cross-tier contract tests covering multi-channel notifications, proxy rotation, domain throttling, price extraction, and price history, bringing the suite to 42 passing tests.
+
+### Changed
+- **Application Version (`config.py`, `pyproject.toml`, `README.md`)**: Bumped version to `0.4.0`.
+
 ## [0.3.1] - 2026-11-27
 
 ### Added

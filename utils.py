@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import aiohttp
 
@@ -38,13 +38,14 @@ def retry(retries: int = 3, delay: float = 1.0) -> Callable:
 
 
 @retry(retries=2, delay=1.0)
-async def fetch_product_page(url: str) -> str:
-    """Fetch HTML content for a product page."""
+async def fetch_product_page(url: str, proxy: Optional[str] = None) -> str:
+    """Fetch HTML content for a product page, optionally via an HTTP/HTTPS proxy."""
     timeout = aiohttp.ClientTimeout(total=15)
+    request_kwargs: dict[str, Any] = {"proxy": proxy} if proxy else {}
     async with aiohttp.ClientSession(
         timeout=timeout, headers=DEFAULT_HEADERS
     ) as session:
-        async with session.get(url) as response:
+        async with session.get(url, **request_kwargs) as response:
             if response.status != 200:
                 raise aiohttp.ClientError(
                     f"Failed to fetch {url}: Status code {response.status}"
